@@ -1,3 +1,35 @@
+ITU-T Rec. T.835 (ex T.JXR-5) | ISO/IEC 29199-5
+
+"Information technology – JPEG XR image coding system – Reference software"
+
+==============
+ READ-ME FILE
+==============
+
+*********************************************************************
+*                                                                   *
+* NOTE: the software in folder my_getopt-1.5 is used solely for     *
+* facilitating handling of the command line interface paramenters,  *
+* and it is not part of the algorithimic implementation of JPEG-XR. *
+*                                                                   *
+*********************************************************************
+
+JPEG XR reference software 1.8 (September 2009)
+-------------------------------------------------------------------
+
+This version constitutes changes to the encoder only. Two bugs were fixed:
+1.	Fix a crashing bug for tiling.
+2.	Fix a bug in the overlap operators. Overlap code was using row indices relative to the tile instead of relative to the image.
+
+No changes were made to the usage text.
+
+JPEG XR reference software 1.7 (July 2009)
+-------------------------------------------------------------------
+
+This version constitutes a change to the encoder only. A bug related to using a detailed quantization information file 
+without specifying tile sizes (or without tiling) was fixed.
+
+No changes were made to the usage text.
 
 JPEG XR reference software 1.6 (29 May 2009)
 -------------------------------------------------------------------
@@ -443,3 +475,4 @@ body is one each of these channel items:
    LP { <n>... }
    HP { <n>... }
 
+--END

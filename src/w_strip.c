@@ -3,7 +3,7 @@
 *
 * This software module was originally contributed by Microsoft
 * Corporation in the course of development of the
-* ITU-T "T.JXR" | ISO/IEC 29199-2 ("JPEG XR") format standard for
+* ITU-T T.832 | ISO/IEC 29199-2 ("JPEG XR") format standard for
 * reference purposes and its performance may not have been optimized.
 *
 * This software module is an implementation of one or more
@@ -13,7 +13,7 @@
 * copyright license to copy, distribute, and make derivative works
 * of this software module or modifications thereof for use in
 * products claiming conformance to the JPEG XR standard as
-* specified by ITU-T "T.JXR" | ISO/IEC 29199-2.
+* specified by ITU-T T.832 | ISO/IEC 29199-2.
 *
 * ITU/ISO/IEC give users the same free license to this software
 * module or modifications thereof for research purposes and further
@@ -24,50 +24,19 @@
 * liability for use of this software module or modifications thereof.
 *
 * Copyright is not released for products that do not conform to
-* to the JPEG XR standard as specified by ITU-T "T.JXR" |
+* to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
-*
-******** Section to be removed when the standard is published ************
-*
-* Assurance that the contributed software module can be used
-* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
-* standard has been adopted; and
-* (2) to develop the JPEG XR standard:
-*
-* Microsoft Corporation and any subsequent contributors to the development
-* of this software grant ITU/ISO/IEC all rights necessary to include
-* the originally developed software module or modifications thereof in the
-* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
-* worldwide, non-exclusive copyright license to copy, distribute, and make
-* derivative works of this software module or modifications thereof for
-* use in products claiming conformance to the JPEG XR standard as
-* specified by ITU-T "T.JXR" | ISO/IEC 29199-2, and to the extent that
-* such originally developed software module or portions of it are included
-* in an ITU/ISO/IEC standard. To the extent that the original contributors
-* may own patent rights that would be required to make, use, or sell the
-* originally developed software module or portions thereof included in the
-* ITU/ISO/IEC standard in a conforming product, the contributors will
-* assure ITU/ISO/IEC that they are willing to negotiate licenses under
-* reasonable and non-discriminatory terms and conditions with
-* applicants throughout the world and in accordance with their patent
-* rights declarations made to ITU/ISO/IEC (if any).
-*
-* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
-* gives You a free license to this software module or modifications
-* thereof for the sole purpose of developing the JPEG XR standard.
-*
-******** end of section to be removed when the standard is published *****
 *
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
-* do not conform to the JPEG XR standard as specified by ITU-T "T.JXR" |
+* do not conform to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
 * This copyright notice must be included in all copies or derivative
 * works.
 *
-* Copyright (c) ITU-T/ISO/IEC 2008.
+* Copyright (c) ITU-T/ISO/IEC 2008, 2009.
 **********************************************************************/
 
 #ifdef _MSC_VER
@@ -86,9 +55,9 @@
 static void w_rotate_mb_strip(jxr_image_t image);
 static void collect_and_scale_up4(jxr_image_t image, int ty);
 static void scale_and_shuffle_up3(jxr_image_t image);
-static void first_prefilter_up2(jxr_image_t image);
+static void first_prefilter_up2(jxr_image_t image, int ty);
 static void PCT_stage2_up1(jxr_image_t image, int ch, int ty);
-static void second_prefilter_up1(jxr_image_t image);
+static void second_prefilter_up1(jxr_image_t image, int ty);
 static void PCT_stage1_up2(jxr_image_t image, int ch, int ty);
 static void w_predict_up1_dclp(jxr_image_t image, int tx, int ty, int mx);
 static int w_calculate_mbhp_mode_up1(jxr_image_t image, int tx, int mx);
@@ -335,7 +304,7 @@ static void wflush_process_strip(jxr_image_t image, int ty)
         (up3) are collected and scaled. The filter looks
         ahead to up3 for bottom context. */
         if (OVERLAP_INFO(image) != 0)
-            first_prefilter_up2(image);
+            first_prefilter_up2(image,ty);
 
         /* Transform up2 data to DC-HP coefficients. */
         for (ch = 0; ch < image->num_channels ; ch += 1)
@@ -353,7 +322,7 @@ static void wflush_process_strip(jxr_image_t image, int ty)
         it. The filter assumes that this strip (up1) and the
         next (up2) have already been PCT processed. */
         if (OVERLAP_INFO(image) == 2)
-            second_prefilter_up1(image);
+            second_prefilter_up1(image,ty);
 
         /* PCT_level1_cur */
         for (ch = 0; ch < image->num_channels ; ch += 1)
@@ -1215,19 +1184,20 @@ static int*R2B42(int*data, int x, int y)
 #define RIGHT_X(idx) ( idx == image->tile_column_width[tx] -1 )
 
 
-static void first_prefilter444_up2(jxr_image_t image, int ch)
+static void first_prefilter444_up2(jxr_image_t image, int ch, int ty)
 {
     assert(ch == 0 || (image->use_clr_fmt != 2/*YUV422*/ && image->use_clr_fmt !=1/* YUV420*/));
     int tx = 0; /* XXXX */
     int top_my = image->cur_my + 2;
     int idx;
 
-    DEBUG("Pre Level2 for row %d\n", top_my);
+    if (top_my >= image->tile_row_height[ty])
+        top_my -= image->tile_row_height[ty++];
+    if (top_my >= image->tile_row_height[ty])
+        top_my -= image->tile_row_height[ty++];
+    top_my += image->tile_row_position[ty];
 
-    int ty = 0;
-    /* Figure out which tile row the current strip of macroblocks belongs to. */
-    while(top_my > image->tile_row_position[ty]+image->tile_row_height[ty] - 1)
-        ty++;
+    DEBUG("Pre Level2 for row %d\n", top_my);
 
     for(tx = 0; tx < image->tile_columns; tx++)
     {
@@ -1416,7 +1386,7 @@ static void first_prefilter444_up2(jxr_image_t image, int ch)
     }
 }
 
-static void first_prefilter422_up2(jxr_image_t image, int ch)
+static void first_prefilter422_up2(jxr_image_t image, int ch, int ty)
 {
     assert(ch > 0 && image->use_clr_fmt == 2/*YUV422*/);
     int tx = 0; /* XXXX */
@@ -1425,15 +1395,13 @@ static void first_prefilter422_up2(jxr_image_t image, int ch)
     assert(top_my >= 0 );
     int idx;
 
+    if (top_my >= image->tile_row_height[ty])
+        top_my -= image->tile_row_height[ty++];
+    if (top_my >= image->tile_row_height[ty])
+        top_my -= image->tile_row_height[ty++];
+    top_my += image->tile_row_position[ty];
 
     DEBUG("Pre Level2 for row %d\n", top_my);
-
-    int ty = 0;
-    /* Figure out which tile row the current strip of macroblocks belongs to. */
-    while(top_my > image->tile_row_position[ty]+image->tile_row_height[ty] - 1)
-        ty++;
-
-
 
     for(tx = 0; tx < image->tile_columns; tx++)
     {
@@ -1615,21 +1583,20 @@ static void first_prefilter422_up2(jxr_image_t image, int ch)
     }
 }
 
-static void first_prefilter420_up2(jxr_image_t image, int ch)
+static void first_prefilter420_up2(jxr_image_t image, int ch, int ty)
 {
     assert(ch > 0 && image->use_clr_fmt == 1/*YUV420*/);
     int tx = 0; /* XXXX */
     int top_my = image->cur_my + 2;
     int idx;
 
+    if (top_my >= image->tile_row_height[ty])
+        top_my -= image->tile_row_height[ty++];
+    if (top_my >= image->tile_row_height[ty])
+        top_my -= image->tile_row_height[ty++];
+    top_my += image->tile_row_position[ty];
 
     DEBUG("Pre Level2 (YUV420) for row %d\n", top_my);
-
-    int ty = 0;
-
-    /* Figure out which tile row the current strip of macroblocks belongs to. */
-    while(top_my > image->tile_row_position[ty]+image->tile_row_height[ty] - 1)
-        ty++;
 
     for(tx = 0; tx < image->tile_columns; tx++)
     {
@@ -1787,25 +1754,25 @@ static void first_prefilter420_up2(jxr_image_t image, int ch)
     }
 }
 
-static void first_prefilter_up2(jxr_image_t image)
+static void first_prefilter_up2(jxr_image_t image, int ty)
 {
     int ch;
-    first_prefilter444_up2(image, 0);
+    first_prefilter444_up2(image, 0, ty);
     switch (image->use_clr_fmt) {
         case 0:
             assert(image->num_channels == 1);
             break;
         case 1:/*YUV420*/
-            first_prefilter420_up2(image, 1);
-            first_prefilter420_up2(image, 2);
+            first_prefilter420_up2(image, 1, ty);
+            first_prefilter420_up2(image, 2, ty);
             break;
         case 2:/*YUV422*/
-            first_prefilter422_up2(image, 1);
-            first_prefilter422_up2(image, 2);
+            first_prefilter422_up2(image, 1, ty);
+            first_prefilter422_up2(image, 2, ty);
             break;
         default:
             for (ch = 1 ; ch < image->num_channels ; ch += 1)
-                first_prefilter444_up2(image, ch);
+                first_prefilter444_up2(image, ch, ty);
             break;
     }
 }
@@ -1984,20 +1951,18 @@ static void PCT_stage2_up1(jxr_image_t image, int ch, int ty)
     }
 }
 
-static void second_prefilter444_up1(jxr_image_t image, int ch)
+static void second_prefilter444_up1(jxr_image_t image, int ch, int ty)
 {
     assert(ch == 0 || (image->use_clr_fmt != 2/*YUV422*/ && image->use_clr_fmt !=1/* YUV420*/));
     int tx = 0; /* XXXX */
     int top_my = image->cur_my + 1;
     int idx;
 
+    if (top_my >= image->tile_row_height[ty])
+        top_my -= image->tile_row_height[ty++];
+    top_my += image->tile_row_position[ty];
+
     DEBUG("Pre Level1 (YUV444) for row %d\n", top_my);
-
-
-    int ty = 0;
-    /* Figure out which tile row the current strip of macroblocks belongs to. */
-    while(top_my > image->tile_row_position[ty]+image->tile_row_height[ty] - 1)
-        ty++;
 
     for(tx = 0; tx < image->tile_columns; tx++)
     {
@@ -2108,20 +2073,18 @@ static void second_prefilter444_up1(jxr_image_t image, int ch)
 }
 
 
-static void second_prefilter422_up1(jxr_image_t image, int ch)
+static void second_prefilter422_up1(jxr_image_t image, int ch, int ty)
 {
     assert(ch > 0);
     int tx = 0; /* XXXX */
     int top_my = image->cur_my + 1;
     int idx;
 
+    if (top_my >= image->tile_row_height[ty])
+        top_my -= image->tile_row_height[ty++];
+    top_my += image->tile_row_position[ty];
+
     DEBUG("Pre Level2 (YUV422) for row %d\n", top_my);
-
-    int ty = 0;
-    /* Figure out which tile row the current strip of macroblocks belongs to. */
-    while(top_my > image->tile_row_position[ty]+image->tile_row_height[ty] - 1)
-        ty++;
-
 
     /* Top edge */
     if(top_my == 0 || (image->disableTileOverlapFlag && TOP_Y(top_my)))
@@ -2320,19 +2283,18 @@ static void second_prefilter422_up1(jxr_image_t image, int ch)
     }
 }
 
-static void second_prefilter420_up1(jxr_image_t image, int ch)
+static void second_prefilter420_up1(jxr_image_t image, int ch, int ty)
 {
     assert(ch > 0);
     int tx = 0; /* XXXX */
     int top_my = image->cur_my + 1;
     int idx;
 
-    DEBUG("Pre Level2 (YUV420) for row %d\n", top_my);
+    if (top_my >= image->tile_row_height[ty])
+        top_my -= image->tile_row_height[ty++];
+    top_my += image->tile_row_position[ty];
 
-    int ty = 0;
-    /* Figure out which tile row the current strip of macroblocks belongs to. */
-    while(top_my > image->tile_row_position[ty]+image->tile_row_height[ty] - 1)
-        ty++;
+    DEBUG("Pre Level2 (YUV420) for row %d\n", top_my);
 
     if(top_my == 0 || (image->disableTileOverlapFlag && TOP_Y(top_my)))
     {
@@ -2497,25 +2459,25 @@ static void second_prefilter420_up1(jxr_image_t image, int ch)
     }
 }
 
-static void second_prefilter_up1(jxr_image_t image)
+static void second_prefilter_up1(jxr_image_t image, int ty)
 {
     int ch;
-    second_prefilter444_up1(image, 0);
+    second_prefilter444_up1(image, 0, ty);
     switch (image->use_clr_fmt) {
         case 0:
             assert(image->num_channels == 1);
             break;
         case 1:/*YUV420*/
-            second_prefilter420_up1(image, 1);
-            second_prefilter420_up1(image, 2);
+            second_prefilter420_up1(image, 1, ty);
+            second_prefilter420_up1(image, 2, ty);
             break;
         case 2:/*YUV422*/
-            second_prefilter422_up1(image, 1);
-            second_prefilter422_up1(image, 2);
+            second_prefilter422_up1(image, 1, ty);
+            second_prefilter422_up1(image, 2, ty);
             break;
         default:
             for (ch = 1 ; ch < image->num_channels ; ch += 1)
-                second_prefilter444_up1(image, ch);
+                second_prefilter444_up1(image, ch, ty);
             break;
     }
 }
@@ -3199,6 +3161,9 @@ static void w_PredCBP(jxr_image_t image, unsigned tx, unsigned ty, unsigned mx)
 
 /*
 * $Log: w_strip.c,v $
+* Revision 1.50 2009/09/16 12:00:00 microsoft
+* Reference Software v1.8 updates.
+*
 * Revision 1.49 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *
