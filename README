@@ -1,0 +1,13 @@
+Information technology -- JPEG XR image coding system -- Part 5: Reference software 
+
+This is source code of the JPEG XR Reference Software from 29n10430att.zip
+available at http://www.itscj.ipsj.or.jp/sc29/open/29view/29n10430c.htm
+
+Pointed by Microsoft team in discussion on Windows Imaging Component (WIC) forum:
+http://social.msdn.microsoft.com/Forums/en-US/windowswic/thread/dfdd2455-f2fc-4f51-b528-affade3374a1
+
+Git: https://github.com/mloskot/jxr-refsoft
+
+Git repository maintained by Mateusz Loskot <mateusz at loskot dot net>
+
+Version import date: 2012-03-24
