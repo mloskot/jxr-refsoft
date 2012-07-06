@@ -57,7 +57,7 @@
 # define JXR_EXTERN extern "C" __declspec(dllimport)
 # endif
 #else
-# ifdef _cplusplus
+# ifdef __cplusplus
 # define JXR_EXTERN extern "C"
 # else
 # define JXR_EXTERN extern
