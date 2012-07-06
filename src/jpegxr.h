@@ -51,14 +51,18 @@
 # include <stdio.h>
 
 #ifdef _MSC_VER
-# ifdef JXR_DLL_EXPORTS
-# define JXR_EXTERN extern "C" __declspec(dllexport)
-# else
-# define JXR_EXTERN extern "C" __declspec(dllimport)
+# ifdef JXR_DLL
+#  ifdef JXR_DLL_EXPORTS
+#  define JXR_EXTERN extern "C" __declspec(dllexport)
+#  else
+#  define JXR_EXTERN extern "C" __declspec(dllimport)
+#  endif
 # endif
-#else
+#endif
+
+#ifndef JXR_EXTERN
 # ifdef __cplusplus
-# define JXR_EXTERN extern "C"
+#  define JXR_EXTERN extern "C"
 # else
 # define JXR_EXTERN extern
 # endif
