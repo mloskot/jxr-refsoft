@@ -30,6 +30,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -43,26 +74,20 @@
 ***********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: jpegxr.h,v 1.26 2008/03/18 18:36:56 steve Exp $")
-#else
-#ident "$Id: jpegxr.h,v 1.26 2008/03/18 18:36:56 steve Exp $"
+#pragma comment (user,"$Id: jpegxr.h,v 1.7 2011-04-28 08:45:43 thor Exp $")
 #endif
 
 # include <stdio.h>
 
 #ifdef _MSC_VER
-# ifdef JXR_DLL
-#  ifdef JXR_DLL_EXPORTS
-#  define JXR_EXTERN extern "C" __declspec(dllexport)
-#  else
-#  define JXR_EXTERN extern "C" __declspec(dllimport)
-#  endif
+# ifdef JXR_DLL_EXPORTS
+# define JXR_EXTERN extern "C" __declspec(dllexport)
+# else
+# define JXR_EXTERN extern "C" __declspec(dllimport)
 # endif
-#endif
-
-#ifndef JXR_EXTERN
-# ifdef __cplusplus
-#  define JXR_EXTERN extern "C"
+#else
+# ifdef _cplusplus
+# define JXR_EXTERN extern "C"
 # else
 # define JXR_EXTERN extern
 # endif
@@ -370,7 +395,18 @@ JXR_EXTERN unsigned jxr_get_IMAGE_WIDTH(jxr_image_t image);
 JXR_EXTERN unsigned jxr_get_IMAGE_HEIGHT(jxr_image_t image);
 JXR_EXTERN unsigned jxr_get_EXTENDED_IMAGE_WIDTH(jxr_image_t image);
 JXR_EXTERN unsigned jxr_get_EXTENDED_IMAGE_HEIGHT(jxr_image_t image);
+/* WARNING: This call returns the number of channels in the codestream,
+** which is *likely* not the information you care about. Instead, the
+** number of components is defined through the pixel format in the
+** container.
+*/
 JXR_EXTERN int jxr_get_IMAGE_CHANNELS(jxr_image_t image);
+/* While the above returns the number of channels encoded in the codestream,
+** the following returns the nominal number of channels indicated in the
+** component. Note that this might be different because Y-Only is enabled
+** and thus everything but the first channel is missing. Bummer!
+*/
+JXR_EXTERN int jxr_get_CONTAINER_CHANNELS(jxr_image_t image);
 JXR_EXTERN int jxr_get_TILING_FLAG(jxr_image_t image);
 JXR_EXTERN int jxr_get_FREQUENCY_MODE_CODESTREAM_FLAG(jxr_image_t image);
 JXR_EXTERN unsigned jxr_get_TILE_COLUMNS(jxr_image_t image);
@@ -378,7 +414,28 @@ JXR_EXTERN unsigned jxr_get_TILE_ROWS(jxr_image_t image);
 JXR_EXTERN int jxr_get_TILE_WIDTH(jxr_image_t image, unsigned column);
 JXR_EXTERN int jxr_get_TILE_HEIGHT(jxr_image_t image, unsigned row);
 
+/*
+** Check whether the codestream includes an interleaved alpha channel.
+** WARNING: This is most likely not what you care about. In the JXR
+** file format, you may also have a separate alpha channel in a second
+** codestream.
+*/
 JXR_EXTERN int jxr_get_ALPHACHANNEL_FLAG(jxr_image_t image);
+/*
+** Check whether the container format includes an alpha channel
+** flag. This alpha channel can be either realized as separate or as
+** interleaved alpha channel. This call returns 1 in either case.
+*/
+JXR_EXTERN int jxr_get_CONTAINER_ALPHA_FLAG(jxr_image_t image);
+
+/*
+** Return an indicator whether we are currently decoding a separate alpha
+** channel. Returns 0 in case the primary channels are decoded, returns 1
+** in case the separate alpha channel is decoded.
+*/
+JXR_EXTERN int jxr_is_DECODING_SEPARATE_ALPHA(jxr_image_t image);
+
+
 JXR_EXTERN jxrc_t_pixelFormat jxr_get_pixel_format(jxr_image_t image);
 
 /*
@@ -518,6 +575,11 @@ JXR_EXTERN void jxr_set_NUM_HOR_TILES_MINUS1(jxr_image_t image, unsigned num);
 JXR_EXTERN void jxr_set_TILE_HEIGHT_IN_MB(jxr_image_t image, unsigned* list);
 JXR_EXTERN void jxr_set_TILING_FLAG(jxr_image_t image, int flag);
 JXR_EXTERN void jxr_set_container_parameters(jxr_image_t image, jxrc_t_pixelFormat pixel_format, unsigned wid, unsigned hei, unsigned separate, unsigned char image_presence, unsigned char alpha_presence, unsigned char alpha);
+
+/*
+** Set chroma centering
+*/
+JXR_EXTERN void jxr_set_CHROMA_CENTERING(jxr_image_t image,unsigned x,unsigned y);
 
 /*
 * It is a consequence of the JXR format that an image can have no
@@ -680,6 +742,12 @@ JXR_EXTERN void jxr_set_pixel_format(jxr_image_t image, jxrc_t_pixelFormat pixel
 JXR_EXTERN int jxr_read_image_bitstream(jxr_image_t image, FILE*fd);
 
 /*
+** thor: Added April 2nd 2010: Initialize for stripe by stripe reading.
+*/
+JXR_EXTERN int jxr_init_read_stripe_bitstream(jxr_image_t image, FILE *fd);
+JXR_EXTERN int jxr_read_stripe_bitstream(jxr_image_t image);
+
+/*
 * After decoder is run, test desired LONG_WORD_FLAG against 
 * calculations done in decoder
 */
@@ -704,11 +772,40 @@ JXR_EXTERN int jxr_write_image_bitstream(jxr_image_t image, FILE*fd);
 # define JXR_EC_IO (-4) /* Error reading/writing data */
 # define JXR_EC_BADFORMAT (-5) /* Bad file format */
 
+/*
+** Added by thor April 2nd 2010: No memory left. I hope I got all the places,
+** but the code seems to be ill-prepared to handle OOM cases.
+*/
+# define JXR_EC_NOMEM (-6)
+
+/*
+** Added by thor April 2nd 2010: Not really an error code, but an indication
+** that the last stripe has been decoded in line based mode and no further data
+** is there.
+*/
+# define JXR_EC_DONE (-256)
 
 #undef JXR_EXTERN
 
 /*
 * $Log: jpegxr.h,v $
+* Revision 1.7  2011-04-28 08:45:43  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.6  2011-03-04 12:12:12  thor
+* Bumped to 1.16. Fixed RGB-YOnly handling, including the handling of
+* YOnly for which a new -f flag has been added.
+*
+* Revision 1.5  2010-05-13 16:30:03  thor
+* Added options to set the chroma centering. Fixed writing of BGR565.
+* Made the "-p" output option nicer.
+*
+* Revision 1.4  2010-05-01 11:16:08  thor
+* Fixed the tiff tag order. Added spatial/line mode.
+*
+* Revision 1.3  2010-03-31 07:50:58  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.28 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *

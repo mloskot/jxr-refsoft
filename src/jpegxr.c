@@ -1,6 +1,6 @@
 /*
 **
-** $Id: jpegxr.c,v 1.4 2008/05/25 09:40:46 thor Exp $
+** $Id: jpegxr.c,v 1.35 2011-11-22 12:30:15 thor Exp $
 **
 ** This is the main program
 **
@@ -34,6 +34,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -47,9 +78,7 @@
 ***********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: jpegxr.c,v 1.4 2008/05/25 09:40:46 thor Exp $")
-#else
-#ident "$Id: jpegxr.c,v 1.4 2008/05/25 09:40:46 thor Exp $"
+#pragma comment (user,"$Id: jpegxr.c,v 1.35 2011-11-22 12:30:15 thor Exp $")
 #endif
 
 # include <stdio.h>
@@ -104,12 +133,23 @@ static unsigned tile_rows = 1;
 static unsigned tile_columns = 1;
 static unsigned tile_width_in_MB[MAX_TILES * 2] = {0};
 static unsigned tile_height_in_MB[MAX_TILES * 2] = {0};
+static unsigned chroma_x_centering = 0;
+static unsigned chroma_y_centering = 0;
 
 static unsigned char shift_bits = 0;
 static unsigned char len_mantissa = 10;
 static char exp_bias = 4;
 
 static raw_info raw_info_t;
+
+/*
+** Added by thor April 2nd 2010: Line based mode (for Pegasus)
+*/
+static int line_mode = 0;
+
+/*
+** Prototypes
+*/
 
 static int main_compress(const char*path);
 static int main_decompress(const char*path);
@@ -137,7 +177,7 @@ int main(int argc, char*argv[])
     raw_info_t.raw_format = 3;
     raw_info_t.raw_bpc = 8;
 
-    while ((flag = getopt(argc, argv, "b:cphmwdra:D:f:F:l:o:U:C:R:P:L:q:Q:X:W:H:M:B:s:")) != -1)  {
+    while ((flag = getopt(argc, argv, "b:cyphmwdra:D:f:F:l:o:U:C:R:P:L:q:Q:X:W:H:M:B:s:S:")) != -1)  {
         switch (flag) {
             case 'b': /* Bands present */
                 if (strcasecmp(optarg,"ALL") == 0)
@@ -158,6 +198,10 @@ int main(int argc, char*argv[])
             case 'c':
                 compress_flag = 1;
                 break;
+
+	    case 'y':
+	        line_mode = 1;
+	        break;
 
             case 'd':
                 derive_flag = 1;
@@ -180,8 +224,11 @@ int main(int argc, char*argv[])
                     internal_color_fmt = JXR_YUV422;
                 } else if (strcmp(optarg,"YUV420") == 0) {
                     internal_color_fmt = JXR_YUV420;
+                } else if (strcmp(optarg,"YOnly") == 0) {
+		    internal_color_fmt = JXR_YONLY;
                 } else {
-                }
+		  assert(!"Invalid color format specified");
+		}
                 break;
 
             case 'F':
@@ -233,6 +280,15 @@ int main(int argc, char*argv[])
                 }
                 break;
 
+	    case 'S': // chroma sample position
+	        cp_temp = optarg;
+		chroma_x_centering = strtoul(cp_temp, &cp_temp, 10);
+		if (*cp_temp == ':') {
+		  cp_temp += 1;
+		  chroma_y_centering = strtoul(cp_temp,&cp_temp,10);
+		}
+		break;
+		  
             case 'U':
                 cp_temp = optarg;
                 tile_rows = (unsigned) strtoul(cp_temp, &cp_temp, 10);
@@ -253,7 +309,7 @@ int main(int argc, char*argv[])
             case 'a':
                 alpha_mode = strtoul(optarg, 0, 10);
                 if(alpha_mode <0 || alpha_mode > 2)
-                    assert(0);
+                    assert(!"invalid alpha mode");
                 break;
 
             case 'C':
@@ -363,25 +419,27 @@ int main(int argc, char*argv[])
             "  DECODER FLAGS:\n"
             "    [-o <path>] [-w] [-P 44|55|66|111] [-L 4|8|16|32|64|128|255]\n"
             "\n"
-            "\t-o: selects output file name (.raw/.tif/.pnm)\n"
+            "\t-o: selects output file name (.raw/.tif/.pnm/.rgbe)\n"
             "\t    (PNM output can be used only for 24bpp RGB and 8bpp gray Output)\n"
-            "\t    (TIF output can be used for all formats except the following:\n"
-            "\t     N channels, BGR, RGBE, YCC, CMYKDirect & Premultiplied RGB)\n"
+            "\t    (TIF output can be used for all formats)\n"
             "\t    (RAW output can be used for all formats)\n"
+	    "\t-y: select stripe by stripe decoding or encoding\n"
             "\t-w: tests whether LONG_WORD_FLAG needs to be equal to TRUE\n"
             "\t     (will still decode the image)\n"
             "\t-P: selects the maximum accepted profile value\n"
             "\t     (44:Sub-Baseline|55:Baseline|66:Main|111:Advanced)\n"
             "\t-L: selects the maximum accepted level value\n"
             "\t     (4|8|16|32|64|128)\n"
+	    "\t-p: tries to reproduce the padding channel on output. Otherwise,\n"
+	    "\t     padding data will not be written\n"
             "\n"
             "  ENCODER FLAGS: (Temporary (.tmp) files may be used in encoding)\n"
             "    -c [-o <path>] [-b ALL|NOFLEXBITS|NOHIGHPASS|DCONLY] [-a 0|1|2] [-p]\n"
-            "    [-f YUV444|YUV422|YUV420] [-F bits] [-h] [-m] [-l 0|1|2]\n"
+            "    [-f YUV444|YUV422|YUV420|YOnly] [-F bits] [-h] [-m] [-l 0|1|2]\n"
             "    [-q q1[:q2[:q3]]] [-Q <path>] [-d] [-w] [-U rows:columns]\n"
             "    [-C width1[:width2>[:width3...]]] [-R height1[:height2[:height3...]]]\n"
             "    [-P 44|55|66|111] [-L 4|8|16|32|64|128|255] [-s top|left|bottom|right]\n"
-            "    [-r -W width -H height -M 3|4|...|18 [-B 8|16]]\n"
+            "    [-r -W width -H height -M 3|4|...|34 [-B 8|16]]\n"
             "\n"
             "\t-c: selects encoding instead of decoding\n"
             "\t     this flag is necessary for encoding\n"
@@ -407,7 +465,7 @@ int main(int argc, char*argv[])
             "\t     alpha channel (see explanation for -a), this flag causes the encoder\n"
             "\t     to treat the alpha channel as a padding channel instead\n"
             "\t-f: selects the internal color format\n"
-            "\t     (YUV444<Default>|YUV422|YUV420)\n"
+            "\t     (YUV444<Default>|YUV422|YUV420|YOnly)\n"
             "\t-F: selects the number of flexbits to trim\n"
             "\t     (0<default> - 15)\n"
             "\t-h: selects hard tile boundaries\n"
@@ -433,7 +491,9 @@ int main(int argc, char*argv[])
             "\t-L: selects the level value\n"
             "\t     (4|8|16|32|64|128)\n"
             "\t-s: sets the top, left, bottom, and right margins\n"
-            "\n"
+            "\t     (top:left:bottom:right)\n"
+	    "\t-S: selects chroma x and y centering, requires two numbers\n"
+	    "\t     separated by colon, i.e. 'x:y'\n"
             "\t-r: selects encoding with RAW images\n"
             "\t     must also specify -W, -H and -M, optional -B\n"
             "\t-W: RAW image width when encoding with RAW images\n"
@@ -452,9 +512,9 @@ int main(int argc, char*argv[])
             "\t    13: 7-channel Alpha\n"
             "\t    14: 8-channel Alpha\n"
             "\t    15: 32bppRGBE\n"
-            "\t    16: 16bppBGR555\n"
-            "\t    17: 16bppBGR565\n"
-            "\t    18: 32bppBGR101010\n"
+            "\t    16: 16bppRGB555\n"
+            "\t    17: 16bppRGB565\n"
+            "\t    18: 32bppRGB101010\n"
             "\t    19: YCC420\n"
             "\t    20: YCC422\n"
             "\t    21: YCC444\n"
@@ -465,10 +525,10 @@ int main(int argc, char*argv[])
             "\t    26: YCC444 Fixed Point Alpha\n"
             "\t    27: CMYKDIRECT\n"
             "\t    28: CMYKDIRECT Alpha\n"
-            "\t    29: 24bppBGR\n"
-            "\t    30: 32bppBGR\n"
-            "\t    31: 32bppBGRA\n"
-            "\t    32: 32bppPBGRA\n"
+            "\t    29: 24bppRGB\n"
+            "\t    30: 32bppRGB\n"
+            "\t    31: 32bppRGBA\n"
+            "\t    32: 32bppPRGBA\n"
             "\t    33: 64bppPRGBA\n"
             "\t    34: 128bppPRGBAFloat\n"
             "\t-B: RAW image bit/channel when encoding with RAW images\n"
@@ -548,16 +608,20 @@ int setup_image_params(jxr_image_t *ptr_image, void *input_handle, int alpha_mod
     int wid, hei, ncomp, bpi;
     short sf, photometric;
     int padBytes;
-    get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes);
+    int ycc;
+    
+    get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes,&ycc,NULL);
 
-    wid -= (window_params[2] + ((window_params[4] >> 4) << 4));
+    wid -= (window_params[2] + window_params[4]);
     assert(wid > 0);
-    hei -= (window_params[1] + ((window_params[3] >> 4) << 4));
+    hei -= (window_params[1] + window_params[3]);
     assert(hei > 0);
 
     /* Create a stub image. */
     jxr_image_t image = jxr_create_image(wid, hei, window_params);
     *ptr_image = image;
+
+    jxr_set_CHROMA_CENTERING(image,chroma_x_centering,chroma_y_centering);
 
     if (!raw_info_t.is_raw) {
         /* Guess a color format from the number of components. */
@@ -569,23 +633,71 @@ int setup_image_params(jxr_image_t *ptr_image, void *input_handle, int alpha_mod
                     jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_YONLY);
                     break;
                 case 3:
+		  if (photometric == 6) {
+		    switch(ycc) {
+		    case 1:
+		      jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_YUV420);
+		      jxr_set_INTERNAL_CLR_FMT(image, JXR_YUV420, 3);
+		      break;
+		    case 2:
+		      jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_YUV422);
+		      jxr_set_INTERNAL_CLR_FMT(image, JXR_YUV422, 3);
+		      break;
+		    case 3:
+		      jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_YUV444);
+		      /* FIX THOR: YUV444 also allows other internal color formats */
+		      jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 3);
+		      break;
+		    }
+		  } else {
                     jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 3);
                     jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_RGB);
-                    break;
+		  }
+		  break;
                 case 4:
-                    if (photometric == 5){
+                    if (photometric == 5) {
                         jxr_set_INTERNAL_CLR_FMT(image, JXR_YUVK, 4);
-                        jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_CMYK);
-                    }
-                    else if (photometric == 2){ /* RGB_NULL */
-                        jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 3);
+			if (raw_info_t.raw_format == 27 || raw_info_t.raw_format == 28) {
+			  jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_CMYKDIRECT);
+			} else {
+			  jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_CMYK);
+			}
+                    } else if (photometric == 2) { /* RGB_NULL or RGB_alpha */
+                        jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 4);
                         jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_RGB);
-                    }
+                    } else if (photometric == 6) {
+		      switch(ycc) {
+		      case 1:
+			jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_YUV420);
+			jxr_set_INTERNAL_CLR_FMT(image, JXR_YUV420, 4);
+			break;
+		      case 2:
+			jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_YUV422);
+			jxr_set_INTERNAL_CLR_FMT(image, JXR_YUV422, 4);
+			break;
+		      case 3:
+			jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_YUV444);
+			/* FIX THOR: YUV444 also allows other internal color formats */
+			jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 4);
+			break;
+		      }
+		    } else if (photometric == -1) { // RGBE
+		      jxr_set_INTERNAL_CLR_FMT(image, JXR_YUV444, 3);
+		      jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_RGBE);
+		      jxr_set_OUTPUT_BITDEPTH(image, JXR_BD8);   
+		    }
                     break;
                 case 5:
                     if (photometric == 5){ /* CMYKA */
-                        jxr_set_INTERNAL_CLR_FMT(image, JXR_YUVK, 4);
-                        jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_CMYK);
+                        jxr_set_INTERNAL_CLR_FMT(image, JXR_YUVK, 5);
+			/* The raw format is 3 in case it has never been defined before, i.e. the user
+			   gave no further instructions
+			*/
+			if (raw_info_t.raw_format == 27 || raw_info_t.raw_format == 28) {
+			  jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_CMYKDIRECT);
+			} else {
+			  jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_CMYK);
+			}
                     }
                     break;
                 default:
@@ -623,6 +735,9 @@ int setup_image_params(jxr_image_t *ptr_image, void *input_handle, int alpha_mod
                     jxr_set_OUTPUT_BITDEPTH(image, JXR_BD16F);    
                 break;
             case 32:
+	      /* THOR fix: shift_bits should default to 10 if no shift bits are present */
+	        if (shift_bits == 0)
+		  shift_bits = 10;
                 if (sf == 2) {
                     jxr_set_OUTPUT_BITDEPTH(image, JXR_BD32S);
                     jxr_set_SHIFT_BITS(image, shift_bits);
@@ -632,8 +747,14 @@ int setup_image_params(jxr_image_t *ptr_image, void *input_handle, int alpha_mod
                     jxr_set_FLOAT(image, len_mantissa, exp_bias);    
                 }
                 break;
-            default:
-                assert(0);
+	    case 5:
+	        jxr_set_OUTPUT_BITDEPTH(image, JXR_BD5);
+                break;
+ 	    case 10:
+	        jxr_set_OUTPUT_BITDEPTH(image, JXR_BD10);
+                break;
+           default:
+                assert(!"unsupported number of bits per pixel");
                 break;
         }
     }
@@ -658,22 +779,22 @@ int setup_image_params(jxr_image_t *ptr_image, void *input_handle, int alpha_mod
                 jxr_set_OUTPUT_BITDEPTH(image, JXR_BD16);    
         }
         else if (raw_info_t.raw_format == 15) {
-            jxr_set_INTERNAL_CLR_FMT(image, JXR_YUV444, 1);
+            jxr_set_INTERNAL_CLR_FMT(image, JXR_YUV444, 3);
             jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_RGBE);
             jxr_set_OUTPUT_BITDEPTH(image, JXR_BD8);    
         }
         else if (raw_info_t.raw_format == 16) {
-            jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 1);
+            jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 3);
             jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_RGB);
             jxr_set_OUTPUT_BITDEPTH(image, JXR_BD5);    
         }
         else if (raw_info_t.raw_format == 17) {
-            jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 1);
+            jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 3);
             jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_RGB);
             jxr_set_OUTPUT_BITDEPTH(image, JXR_BD565);    
         }
         else if (raw_info_t.raw_format == 18) {
-            jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 1);
+            jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 3);
             jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_RGB);
             jxr_set_OUTPUT_BITDEPTH(image, JXR_BD10);    
         }
@@ -728,7 +849,7 @@ int setup_image_params(jxr_image_t *ptr_image, void *input_handle, int alpha_mod
         else if (raw_info_t.raw_format == 22 || raw_info_t.raw_format == 26) {
             if(!alpha_plane)
             {
-                jxr_set_INTERNAL_CLR_FMT(image, JXR_YUV444, 3);
+                jxr_set_INTERNAL_CLR_FMT(image, internal_color_fmt, 3);
                 jxr_set_OUTPUT_CLR_FMT(image, JXR_OCF_YUV444);
             }
             else 
@@ -854,7 +975,14 @@ int setup_image_params(jxr_image_t *ptr_image, void *input_handle, int alpha_mod
     jxr_set_pixel_format(image, pxl_fmt);
 
     if (quant_uniform) {
-        if (quant_per_channel_count == 1) {
+        if (alpha_mode == 2 && alpha_plane) {
+	  assert(ncomp == 1);
+	  if (quant_per_channel_count == 1) {
+	    jxr_set_QP_UNIFORM(image, quant_per_channel[0]);
+	  } else {
+	    jxr_set_QP_UNIFORM(image, quant_per_channel[quant_per_channel_count]);
+	  }
+	} else if (quant_per_channel_count == 1) {
             jxr_set_QP_UNIFORM(image, quant_per_channel[0]);
         } else if (ncomp >= 3 && quant_per_channel_count == 2) {
             jxr_set_QP_SEPARATE(image, quant_per_channel);
@@ -896,7 +1024,10 @@ int setup_container_params(jxr_container_t container, void *input_handle)
     int wid, hei, ncomp, bpi;
     short sf, photometric;
     int padBytes;
-    get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes);
+    int ycc;
+    int premultiplied;
+
+    get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes,&ycc,&premultiplied);
     int alpha_present = 0;
     if (!raw_info_t.is_raw) {
         switch (ncomp + padBytes) {
@@ -923,96 +1054,202 @@ int setup_container_params(jxr_container_t container, void *input_handle)
                 }
                 break;
             case 3: /* Assume RGB */
-                if (bpi == 8)
-                    pxl_fmt = (JXRC_FMT_24bppRGB);
-                else if (bpi == 16) {
-                    if(sf == 1)
+	        if (bpi == 8) {
+		  if (photometric == 2) 
+                    pxl_fmt = JXRC_FMT_24bppRGB;
+		  else if (photometric == 6) {
+		    switch(ycc) {
+		    case 1:
+		      pxl_fmt = JXRC_FMT_12bppYCC420;
+		      break;
+		    case 2:
+		      pxl_fmt = JXRC_FMT_16bppYCC422;
+		      break;
+		    case 3:
+		      pxl_fmt = JXRC_FMT_24bppYCC444;
+		      break;
+		    }
+		  }
+                } else if (bpi == 16) {
+		    if(sf == 1) {
+		      if (photometric == 2) 
                         pxl_fmt = JXRC_FMT_48bppRGB;
-                    else if(sf == 2)
+		      else if (photometric == 6) {
+			switch(ycc) {
+			case 2:
+			  pxl_fmt = JXRC_FMT_32bppYCC422;
+			  break;
+			case 3:
+			  pxl_fmt = JXRC_FMT_48bppYCC444;
+			  break;
+			}
+		      }
+                    } else if(sf == 2) {
+		      if (photometric == 2)
                         pxl_fmt = JXRC_FMT_48bppRGBFixedPoint;
-                    else if(sf == 3)
+		      else if (photometric == 6 && ycc == 3)
+			pxl_fmt = JXRC_FMT_48bppYCC444FixedPoint;
+		    } else if(sf == 3)
                         pxl_fmt = JXRC_FMT_48bppRGBHalf;
-                }
-                else if (bpi == 32) {
+                } else if (bpi == 32) {
                     if(sf == 2)
                         pxl_fmt = JXRC_FMT_96bppRGBFixedPoint;
-                    /* no 96bppRGBFloat */
-                }
-                    break;
+		    else if (sf == 3)
+		        pxl_fmt = JXRC_FMT_128bppRGBFloat; /* no 96bppRGBFloat, encode as 128bppRGBFloat */
+                } else if (bpi == 5) {
+		    pxl_fmt = JXRC_FMT_16bppBGR555;
+		} else if (bpi == 10) {
+		  if (photometric == 2)
+		    pxl_fmt = JXRC_FMT_32bppBGR101010;
+		  else if (photometric == 6) {
+		    switch(ycc) {
+		    case 2:
+		      pxl_fmt = JXRC_FMT_20bppYCC422;
+		      break;
+		    case 3:
+		      pxl_fmt = JXRC_FMT_30bppYCC444;
+		      break;
+		    }
+		  }
+		}
+		break;
             case 4: /* CMYK or RGBA or RGB_Null*/
                 if (bpi == 8) {
-                    if (photometric == 5)
-                        pxl_fmt = JXRC_FMT_32bppCMYK;
+		    if (photometric == 5) {
+		      pxl_fmt = JXRC_FMT_32bppCMYK;
+		      /* The raw format is 3 in case it has never been defined before, i.e. the user
+			 gave no further instructions
+		      */
+		      if (raw_info_t.raw_format == 27 || raw_info_t.raw_format == 28) {
+			pxl_fmt = JXRC_FMT_32bppCMYKDIRECT;
+		      }
+		    } else if (photometric == 2) {
+		      if (padded_format) {
+			pxl_fmt = JXRC_FMT_32bppBGR;
+		      } else {
+		        pxl_fmt = JXRC_FMT_32bppBGRA;
+			if (raw_info_t.raw_format == 32 || premultiplied)
+			  pxl_fmt = JXRC_FMT_32bppPBGRA;
+			alpha_present = 1;
+		      }
+		    } else if (photometric == 6) {
+		      alpha_present = 1;
+		      switch(ycc) {
+		      case 1:
+			pxl_fmt = JXRC_FMT_20bppYCC420Alpha;
+			break;
+		      case 2:
+			pxl_fmt = JXRC_FMT_24bppYCC422Alpha;
+			break;
+		      case 3:
+			pxl_fmt = JXRC_FMT_32bppYCC444Alpha;
+			break;
+		      }
+		    } else if (photometric == -1) { // special
+		      pxl_fmt = JXRC_FMT_32bppRGBE;
+		      break;
+		    }
                 }
                 else if (bpi == 16) {
-                    if (photometric == 5)
-                        pxl_fmt = JXRC_FMT_64bppCMYK;
-                    else if (photometric == 2) {
-                        if (sf == 1) 
-                        {
-                            alpha_present = 1;
-                            pxl_fmt = JXRC_FMT_64bppRGBA; /* no 64bppRGB */
-                        }
-                        else if (sf == 2) {
-                            if (ncomp == 3)
-                                pxl_fmt = JXRC_FMT_64bppRGBFixedPoint;
-                            else if (ncomp == 4)
-                            {
-                                alpha_present = 1;
-                                pxl_fmt = JXRC_FMT_64bppRGBAFixedPoint;
-                            }
-                        }
-                        else if (sf == 3) {
-                            if (ncomp == 3)
-                                pxl_fmt = JXRC_FMT_64bppRGBHalf;                        
-                            else if (ncomp == 4) 
-                            {
-                                alpha_present = 1;
-                                pxl_fmt = JXRC_FMT_64bppRGBAHalf;
-                            }
-                        }
-                    }
+		    if (photometric == 5) {
+		      pxl_fmt = JXRC_FMT_64bppCMYK;
+		      if (raw_info_t.raw_format == 27 || raw_info_t.raw_format == 28) {
+			pxl_fmt = JXRC_FMT_64bppCMYKDIRECT;
+		      }
+		    } else if (photometric == 2) {
+		      if (sf == 1) {
+			alpha_present = 1;
+			pxl_fmt = JXRC_FMT_64bppRGBA; /* no 64bppRGB */
+			if (raw_info_t.raw_format == 33)
+			  pxl_fmt = JXRC_FMT_64bppPRGBA;
+		      } else if (sf == 2) {
+			if (ncomp == 3)
+			  pxl_fmt = JXRC_FMT_64bppRGBFixedPoint;
+			else if (ncomp == 4) {
+			  alpha_present = 1;
+			  pxl_fmt = JXRC_FMT_64bppRGBAFixedPoint;
+			}
+		      } else if (sf == 3) {
+			if (ncomp == 3)
+			  pxl_fmt = JXRC_FMT_64bppRGBHalf;                        
+			else if (ncomp == 4) {
+			  alpha_present = 1;
+			  pxl_fmt = JXRC_FMT_64bppRGBAHalf;
+			}
+		      }
+                    } else if (photometric == 6) {
+		      alpha_present = 1;
+		      switch(ycc) {
+		      case 2:
+			pxl_fmt = JXRC_FMT_48bppYCC422Alpha;
+			break;
+		      case 3:
+			if (sf == 1)
+			  pxl_fmt = JXRC_FMT_64bppYCC444Alpha;
+			else if (sf == 2)
+			  pxl_fmt = JXRC_FMT_64bppYCC444AlphaFixedPoint;
+			break;
+		      }
+		    }
                 }
                 else if (bpi == 32) {
-                    if (photometric == 2) {
-                        if (sf == 2) {
-                            if (ncomp == 3)
-                                pxl_fmt = JXRC_FMT_128bppRGBFixedPoint;
-                            if (ncomp == 4)
-                            {   
-                                alpha_present = 1;
-                                pxl_fmt = JXRC_FMT_128bppRGBAFixedPoint;
-                            }
-                        }
-                        else if(sf == 3) {
-                            if (ncomp == 3)
-                                pxl_fmt = JXRC_FMT_128bppRGBFloat;
-                            else if (ncomp == 4)
-                            {
-                                alpha_present = 1;
-                                pxl_fmt = JXRC_FMT_128bppRGBAFloat;
-                            }
-                        }
-                    }
-                     /* add 128bppRGBAFloat here */
+		  if (photometric == 2) {
+		    if (sf == 2) {
+		      if (ncomp == 3)
+			pxl_fmt = JXRC_FMT_128bppRGBFixedPoint;
+		      if (ncomp == 4) {
+			alpha_present = 1;
+			pxl_fmt = JXRC_FMT_128bppRGBAFixedPoint;
+		      }
+		    } else if(sf == 3) {
+		      if (ncomp == 3)
+			pxl_fmt = JXRC_FMT_128bppRGBFloat;
+		      else if (ncomp == 4) {
+			alpha_present = 1;
+			pxl_fmt = JXRC_FMT_128bppRGBAFloat;
+			if (raw_info_t.raw_format == 34)
+			  pxl_fmt = JXRC_FMT_128bppPRGBAFloat;
+			
+		      }
+		    }
+		  }
                 }
+		else if (bpi == 10) {
+		  if (photometric == 6) {
+		    alpha_present = 1;
+		    switch(ycc) {
+		    case 2:
+		      pxl_fmt = JXRC_FMT_30bppYCC422Alpha;
+		      break;
+		    case 3:
+		      pxl_fmt = JXRC_FMT_40bppYCC444Alpha;
+		      break;
+		    }
+		  }
+		}
                 break;
             case 5: /* CMYKA */
                 if (bpi == 8) {
-                    if (photometric == 5) {
+		    if (1 || photometric == 5) { /* make this the default, even if photometry is absent */
                         alpha_present = 1;
                         pxl_fmt = JXRC_FMT_40bppCMYKAlpha;
+			if (raw_info_t.raw_format == 27 || raw_info_t.raw_format == 28) {
+			  pxl_fmt = JXRC_FMT_40bppCMYKDIRECTAlpha;
+			}
                     }
                 }
                 else if (bpi == 16) {
-                    if (photometric == 5) {
+                    if (1 || photometric == 5) { /* make this the default, even if photometry is absent */
                         alpha_present = 1;
                         pxl_fmt = JXRC_FMT_80bppCMYKAlpha;
-                    }
+			if (raw_info_t.raw_format == 27 || raw_info_t.raw_format == 28) {
+			  pxl_fmt = JXRC_FMT_80bppCMYKDIRECTAlpha;
+			}
+		    }
                 }
                 break;
             default:
-                assert(0);
+                assert(!"unsupported number of channels");
                 break;
         }
     }
@@ -1063,7 +1300,7 @@ int setup_container_params(jxr_container_t container, void *input_handle)
                         pxl_fmt = JXRC_FMT_72bpp8ChannelsAlpha;
                         break;
                     default:
-                        assert(0);
+                        assert(!"unsupported raw format");
                         break;
 
                 }
@@ -1113,7 +1350,7 @@ int setup_container_params(jxr_container_t container, void *input_handle)
                         pxl_fmt = JXRC_FMT_144bpp8ChannelsAlpha;
                         break;
                     default:
-                        assert(0);
+                        assert(!"unsupported raw format");
                         break;
                 }
             }
@@ -1155,7 +1392,7 @@ int setup_container_params(jxr_container_t container, void *input_handle)
                         pxl_fmt = JXRC_FMT_32bppYCC444Alpha;
                         break;
                     default:
-                        assert(0);
+                        assert(!"unsupported raw format");
                         break;
                 }
             }
@@ -1176,7 +1413,7 @@ int setup_container_params(jxr_container_t container, void *input_handle)
                         pxl_fmt = JXRC_FMT_40bppYCC444Alpha;
                         break;
                     default:
-                        assert(0);
+                        assert(!"unsupported raw format");
                         break;
                 }
             }
@@ -1204,12 +1441,12 @@ int setup_container_params(jxr_container_t container, void *input_handle)
                         pxl_fmt = JXRC_FMT_64bppYCC444AlphaFixedPoint;
                         break;
                     default:
-                        assert(0);
+                        assert(!"unsupported raw format");
                         break;
                 }
             }
             else
-                assert(0);
+                assert(!"unsupported raw format");
         }
         else if ((raw_info_t.raw_format >= 27) && (raw_info_t.raw_format <= 28)) { /* CMYKDIRECT */
             if (8 == raw_info_t.raw_bpc) { 
@@ -1222,7 +1459,7 @@ int setup_container_params(jxr_container_t container, void *input_handle)
                         pxl_fmt = JXRC_FMT_40bppCMYKDIRECTAlpha;
                         break;
                     default:
-                        assert(0);
+                        assert(!"unsupported raw format");
                         break;
                 }
             }
@@ -1236,12 +1473,12 @@ int setup_container_params(jxr_container_t container, void *input_handle)
                         pxl_fmt = JXRC_FMT_80bppCMYKDIRECTAlpha;
                         break;
                     default:
-                        assert(0);
+                        assert(!"unsupported raw format");
                         break;
                 }
             }
             else
-                assert(0);
+                assert(!"unsupported raw format");
         }
         else if (raw_info_t.raw_format == 29) { 
             pxl_fmt = JXRC_FMT_24bppBGR;
@@ -1266,7 +1503,7 @@ int setup_container_params(jxr_container_t container, void *input_handle)
             pxl_fmt = JXRC_FMT_128bppPRGBAFloat;
         }
         else
-            assert(0);
+            assert(!"unsupported raw format");
     }
 
     jxrc_set_pixel_format(container, pxl_fmt);
@@ -1276,11 +1513,11 @@ int setup_container_params(jxr_container_t container, void *input_handle)
         if(alpha_mode == 0) /* No -a option was used at command line, so by default, turn on Separate alpha */
         {
             alpha_mode = 2; /* Separate alpha */
-            fprintf(stderr, " Setting alpha_mode to 2\n");
+            //fprintf(stderr, " Setting alpha_mode to 2\n");
         }
         else
         {
-            fprintf(stderr, " Using alpha_mode = %d\n ", alpha_mode);
+	  //fprintf(stderr, " Using alpha_mode = %d\n ", alpha_mode);
         }
 
     }
@@ -1289,11 +1526,13 @@ int setup_container_params(jxr_container_t container, void *input_handle)
         if(alpha_mode != 0)
         {
             alpha_mode = 0;
-            fprintf(stderr, " Setting alpha_mode to 0\n");
+            //fprintf(stderr, " Setting alpha_mode to 0\n");
         }
     }
 
-    jxrc_set_image_shape(container, wid, hei);
+    jxrc_set_image_shape(container, 
+			 wid - window_params[2] - window_params[4], 
+			 hei - window_params[1] - window_params[3]);
     jxrc_set_image_band_presence(container, (unsigned) bands_present); /* another call will need to be added for separate alpha */
     return 0;
 
@@ -1323,7 +1562,7 @@ static int main_compress(const char*path)
     int wid, hei, ncomp, bpi;
     short sf, photometric;
     int padBytes;
-    get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes);    
+    get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes,NULL,NULL);
    
 
     /* Create the file container and bind the FD to it. */
@@ -1353,9 +1592,13 @@ static int main_compress(const char*path)
         /* Open handle to dump  primary in tif format */
         separate_primary_alpha(image, input_handle, path_out, path_primary, path_alpha, container);//jxrc_image_pixelformat(container, 0));        
         close_file(input_handle);
-        input_handle = NULL;        
+        input_handle = NULL;
+	jxr_set_TILE_WIDTH_IN_MB(image,NULL);
+	jxr_set_TILE_HEIGHT_IN_MB(image,NULL);
+	jxr_destroy(image);
+	image = NULL;
         input_handle = open_input_file(path_primary, &raw_info_t, &alpha_mode, &padded_format);        
-        get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes);                
+        get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes,NULL,NULL);
         rc = setup_image_params(&image, input_handle, alpha_mode, 0);        
         if(rc != 0)
             goto exit;        
@@ -1392,7 +1635,7 @@ static int main_compress(const char*path)
     if(alpha_mode == 2)
     {
         input_handle = open_input_file(path_alpha, &raw_info_t, &alpha_mode, &padded_format);
-        get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes);       
+        get_file_parameters(input_handle, &wid, &hei, &ncomp, &bpi, &sf, &photometric, &padBytes,NULL,NULL);
         
         rc = setup_image_params(&image, input_handle, alpha_mode, 1);        
         jxr_set_pixel_format(image, jxrc_get_pixel_format(container));
@@ -1423,6 +1666,10 @@ exit:
     if(fd)
         fclose(fd);
     jxr_destroy_container(container);
+    
+    if (rc != 0)                                              /* JNB20 inserted example */
+      fprintf(stderr,"Unable to create the output file - are the settings correct and supported ?\n");
+
     return rc;
 }
 
@@ -1452,20 +1699,57 @@ static int decompress_image(FILE *fd, jxr_container_t container, void *output_ha
         }
     }
 
-    /* Process as an image bitstream. */
-    rc = jxr_read_image_bitstream(*pImage, fd);
-    if (rc < 0) {
-        switch (rc) {
-            case JXR_EC_BADMAGIC:
-                fprintf(stderr, "No valid magic number. Not an JPEG XR container or bitstream.\n");
-                break;
-            default:
-                fprintf(stderr, " Error %d reading image bitstream\n", rc);
-                break;
-        }
+    /*
+    ** Start mod thor: This is the line-based decoding
+    */
+    if (line_mode) {
+      rc = jxr_init_read_stripe_bitstream(*pImage,fd);
+      if (rc >= 0) {
+	/*
+	** Now read lines one by another. The data arrives at
+	** the usual "output hook" as always.
+	*/
+	do {
+	  rc = jxr_read_stripe_bitstream(*pImage);
+	} while(rc >= 0);
+
+	if (rc == JXR_EC_DONE)
+	  rc = 0; /* The regular return code */
+      }
+    } else {
+      /* Process as an image bitstream. */
+      rc = jxr_read_image_bitstream(*pImage, fd);
     }
-    else
-        rc = jxr_test_LONG_WORD_FLAG(*pImage, long_word_flag_setting);
+    
+    if (rc < 0) {
+      switch (rc) {
+      case JXR_EC_BADMAGIC:
+	fprintf(stderr, "No valid magic number. Not an JPEG XR container or bitstream.\n");
+	break;
+      case JXR_EC_ERROR:
+	fprintf(stderr, "Unspecified error.\n");
+	break;
+      case JXR_EC_FEATURE_NOT_IMPLEMENTED:
+	fprintf(stderr,"A feature required to decode this bitstream is not implemented.\n");
+	break;
+      case JXR_EC_IO:
+	fprintf(stderr,"I/O error reading bitstream.\n");
+	break;
+      case JXR_EC_BADFORMAT:
+	fprintf(stderr,"File format invalid.\n");
+	break;
+      case JXR_EC_NOMEM:
+	fprintf(stderr,"Out of memory.\n");
+	break;
+      default:
+	fprintf(stderr, " Error %d reading image bitstream\n", rc);
+	break;
+      }
+    } else {
+      rc = jxr_test_LONG_WORD_FLAG(*pImage, long_word_flag_setting);
+      if (rc < 0)
+	fprintf(stderr, "LONG_WORD_FLAG condition was set incorrectly\n");
+    }
     return rc;
 
 }
@@ -1476,7 +1760,6 @@ static int decompress_image(FILE *fd, jxr_container_t container, void *output_ha
 static int main_decompress(const char*path_in)
 {
     int rc;
-    int codedImages = 1;
     unsigned int alphaCodedImagePresent = 0;
     void *output_handle_primary = NULL;
     void *output_handle_alpha = NULL;
@@ -1493,8 +1776,6 @@ static int main_decompress(const char*path_in)
         return -1;
     }
 
-    void *output_handle = open_output_file(path_out);
- 
     jxr_container_t ifile = jxr_create_container();
     rc = jxr_read_image_container(ifile, fd);
     if (rc >= 0) {
@@ -1521,6 +1802,10 @@ static int main_decompress(const char*path_in)
 #if defined(DETAILED_DEBUG)
         printf("No container found, assuming unwrapped bistream with no alpha coded image\n");
 #endif
+	// codestream parsing is broken, do not attempt
+	fprintf(stderr,"input image is not a jpegxr file\n");
+	return -1;
+	//
         rc = fseek(fd, 0, SEEK_SET);
         assert(rc >= 0);
     }
@@ -1533,6 +1818,7 @@ static int main_decompress(const char*path_in)
     unsigned long spatial_xfrm, image_type;
     float width_res, height_res;
     unsigned char image_band_present, alpha_band_present, buf[4];
+    const char *ext = strrchr(path_out,'.');
 
     rc = jxrc_document_name(ifile, 0, &document_name);
     rc = jxrc_image_description(ifile, 0, &image_description);
@@ -1560,17 +1846,23 @@ static int main_decompress(const char*path_in)
     alpha_band_present = jxrc_alpha_band_presence(ifile, 0);
     rc = jxrc_padding_data(ifile, 0);
 
+    if (!strcasecmp(ext,".raw"))
+      padded_format = 1;
     
-    if(alphaCodedImagePresent)
-    {
-        /* Open handle to dump decoded primary in raw format */
-        strcpy(path_out_primary, path_out);
-        strcat(path_out_primary, "_primary.raw");
-        output_handle_primary = open_output_file(path_out_primary);     
-    }
-    else
-    {
-        output_handle_primary = open_output_file(path_out);             
+    if(alphaCodedImagePresent) {
+      if (!strcasecmp(ext,".raw")) {
+	/* Open handle to dump decoded primary in raw format */
+	strcpy(path_out_primary, path_out);
+	strcat(path_out_primary, "_primary.raw");
+	output_handle_primary = open_output_file(path_out_primary,padded_format);
+      } else {
+	/* Open handle to dump decoded primary in raw format, but with proper color order */
+	strcpy(path_out_primary, path_out);
+	strcat(path_out_primary, "_primary.craw");
+	output_handle_primary = open_output_file(path_out_primary,padded_format);
+      }
+    } else {
+      output_handle_primary = open_output_file(path_out,padded_format);             
     }
     /*Decode image */
     rc = decompress_image(fd, ifile, output_handle_primary, &image, 0); 
@@ -1582,9 +1874,14 @@ static int main_decompress(const char*path_in)
         goto exit;   
 
     /* Open handle to dump decoded alpha in raw format*/
-    strcpy(path_out_alpha, path_out);
-    strcat(path_out_alpha, "_alpha.raw");
-    output_handle_alpha = open_output_file(path_out_alpha);     
+    if (!strcasecmp(ext,".raw")) {
+      strcpy(path_out_alpha, path_out);
+      strcat(path_out_alpha, "_alpha.raw");
+    } else {
+      strcpy(path_out_alpha, path_out);
+      strcat(path_out_alpha, "_alpha.craw");
+    }
+    output_handle_alpha = open_output_file(path_out_alpha,padded_format);     
 
     /*Seek to alpha offset */
     off = jxrc_alpha_offset(ifile, 0);
@@ -1599,18 +1896,18 @@ static int main_decompress(const char*path_in)
     /* For YCC and CMYKDirect formats, concatenate alpha and primary images */
     /* For other output pixel formats, interleave alphad and primary images */
     {
-        output_handle = open_output_file(path_out);     
-        FILE *fpPrimary = fopen(path_out_primary,"rb");
-        assert(fpPrimary);
-        FILE *fpAlpha = fopen(path_out_alpha,"rb");
-        assert(fpAlpha);
-        jxr_set_user_data(image, output_handle);        
-        write_file_combine_primary_alpha(image, fpPrimary, fpAlpha);
-        fclose(fpPrimary);
-        fclose(fpAlpha);
-        remove(path_out_primary);
-        remove(path_out_alpha);        
-        SAFE_CLOSE(output_handle);
+      void * output_handle = open_output_file(path_out,padded_format);     
+      FILE *fpPrimary = fopen(path_out_primary,"rb");
+      assert(fpPrimary);
+      FILE *fpAlpha = fopen(path_out_alpha,"rb");
+      assert(fpAlpha);
+      jxr_set_user_data(image, output_handle);        
+      write_file_combine_primary_alpha(image, fpPrimary, fpAlpha);
+      fclose(fpPrimary);
+      fclose(fpAlpha);
+      remove(path_out_primary);
+      remove(path_out_alpha);        
+      SAFE_CLOSE(output_handle);
     }
     
 exit:    
@@ -1626,12 +1923,117 @@ exit:
     SAFE_FREE(copyright_notice);
     SAFE_JXR_DESTROY(image);
     SAFE_JXR_DESTROY(imageAlpha);
+    if (ifile)
+      jxr_destroy_container(ifile);
     fclose(fd);
     return 0;
 }
 
 /*
 * $Log: jpegxr.c,v $
+* Revision 1.35  2011-11-22 12:30:15  thor
+* The default color space for the 4 channel generic pixel format
+* is now CMYK. The premultiplied alpha flag is now set correctly on
+* decoding, even for images with a separate alpha plane, and it is
+* honoured correctly on encoding from tif files.
+*
+* Revision 1.34  2011-11-15 10:11:17  thor
+* Bumped to release 1.30.
+*
+* Revision 1.33  2011-11-11 14:24:55  thor
+* Fixed the window handling.
+*
+* Revision 1.32  2011-11-08 20:17:29  thor
+* Merged a couple of fixes from the JNB.
+*
+* Revision 1.31  2011-06-10 21:42:17  thor
+* Removed the timing code again from the main codeline.
+*
+* Revision 1.29  2011-04-28 08:45:43  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.28  2011-03-14 18:21:35  thor
+* Bumped to 1.19. Fixed one assert.
+*
+* Revision 1.27  2011-03-12 19:12:22  thor
+* Fixed compression of 555,565 and 101010 in raw.
+*
+* Revision 1.26  2011-03-09 16:19:31  thor
+* Updated the JXR internal color format writing for raw images.
+*
+* Revision 1.25  2011-03-08 17:30:57  thor
+* Upsampling from YUV42x -> YUV444 does not work.
+*
+* Revision 1.24  2011-03-08 14:39:29  thor
+* Fixed CMYKDirect.
+*
+* Revision 1.23  2011-03-08 12:31:33  thor
+* Fixed YUV444+alpha interleaved and again RGBA+alpha interleaved.
+*
+* Revision 1.22  2011-03-08 11:12:05  thor
+* Fixed partially the YOnly decoding. Still bugs in YUV444 with interleaved
+* alpha.
+*
+* Revision 1.21  2011-03-04 12:12:12  thor
+* Bumped to 1.16. Fixed RGB-YOnly handling, including the handling of
+* YOnly for which a new -f flag has been added.
+*
+* Revision 1.20  2011-02-26 10:24:39  thor
+* Fixed bugs for alpha and separate alpha.
+*
+* Revision 1.19  2010-10-03 13:14:42  thor
+* Fixed missing preshift for BD32 images, added alpha-quantizer
+* parameter. Fixed alpha plane container offset.
+*
+* Revision 1.18  2010-09-10 15:05:45  thor
+* The -f option is now no longer active for the raw 444 subsampled formats.
+*
+* Revision 1.17  2010-09-02 17:13:37  thor
+* Raw output now automatically generates padding.
+*
+* Revision 1.16  2010-08-31 15:38:12  thor
+* Fixed reading of CMYKDirect files, trivial component transposition is
+* not correct.
+*
+* Revision 1.15  2010-07-12 16:06:58  thor
+* Fixed BG swap for raw encoding.
+*
+* Revision 1.14  2010-06-26 12:32:46  thor
+* Fixed RGBE encoding, a color transformation was missing. Added rgbe
+* as input format.
+*
+* Revision 1.13  2010-06-19 11:48:36  thor
+* Fixed memory leaks.
+*
+* Revision 1.12  2010-06-18 20:31:50  thor
+* Fixed a lot of CMYK formats, YCC formats parsing.
+*
+* Revision 1.11  2010-06-17 22:02:14  thor
+* Fixed (partially) the YCC reader. Added type recognition for TIFF.
+*
+* Revision 1.10  2010-05-22 22:14:35  thor
+* Fixed memory leaks in the TIFF parser.
+*
+* Revision 1.9  2010-05-21 12:49:30  thor
+* Fixed alpha encoding for BGRA32, fixed channel order in BGR555,101010 and 565
+* (a double cancelation bug), fixed channel order for BGR which is really RGB.
+*
+* Revision 1.8  2010-05-14 12:48:12  thor
+* Added tiff readers for BGR555 and BGR101010 and BGR565
+*
+* Revision 1.7  2010-05-13 16:30:03  thor
+* Added options to set the chroma centering. Fixed writing of BGR565.
+* Made the "-p" output option nicer.
+*
+* Revision 1.6  2010-05-05 15:13:12  thor
+* Fixed BGR handling for TIF and PNM.
+*
+* Revision 1.5  2010-05-01 11:16:08  thor
+* Fixed the tiff tag order. Added spatial/line mode.
+*
+* Revision 1.4  2010-03-31 07:50:58  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.39 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *

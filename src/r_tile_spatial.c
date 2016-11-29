@@ -1,4 +1,3 @@
-
 /*************************************************************************
 *
 * This software module was originally contributed by Microsoft
@@ -27,6 +26,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -40,9 +70,7 @@
 **********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: r_tile_spatial.c,v 1.53 2008/03/20 22:39:41 steve Exp $")
-#else
-#ident "$Id: r_tile_spatial.c,v 1.53 2008/03/20 22:39:41 steve Exp $"
+#pragma comment (user,"$Id: r_tile_spatial.c,v 1.10 2011-11-08 20:17:29 thor Exp $")
 #endif
 
 # include "jxr_priv.h"
@@ -68,6 +96,11 @@ int _jxr_r_TILE_SPATIAL(jxr_image_t image, struct rbitstream*str,
     s2 = _jxr_rbitstream_uint8(str); /* 0x01 */
     s3 = _jxr_rbitstream_uint8(str); /* reserved */
     DEBUG(" TILE_STARTCODE == %02x %02x %02x (reserved: %02x)\n", s0, s1, s2, s3);
+    if (s0 != 0x00 || s1 != 0x00 || s2 != 0x01) {
+      DEBUG(" TILE_LOWPASS ERROR: Invalid marker.\n");
+      return JXR_EC_ERROR;
+      /* FIX THOR: Invalid TILE_STARTCODE detected */
+    }
 
     image->trim_flexbits = 0;
     if (TRIM_FLEXBITS_FLAG(image)) {
@@ -205,7 +238,289 @@ int _jxr_r_TILE_SPATIAL(jxr_image_t image, struct rbitstream*str,
 }
 
 /*
+** Added by thor April 2nd 2010: Process one stripe at a time.
+*/
+int _jxr_r_TILE_SPATIAL_stripe(jxr_image_t image, struct rbitstream*str,
+			       unsigned tx, unsigned ty)
+{
+  int rc = 0;
+
+  if (image->spatial_buffered_flag == 0) {
+    /* Header is not yet parsed off. Do now.
+     */
+    DEBUG("START TILE_SPATIAL at tile=[%u %u] bitpos=%zu\n", tx, ty, _jxr_rbitstream_bitpos(str));
+    
+    if(INDEXTABLE_PRESENT_FLAG(image)) {
+      _jxr_rbitstream_seek(str, image->tile_index_table[image->tile_columns * ty + tx]);
+    }
+    /* TILE_STARTCODE == 1 */
+    unsigned char s0, s1, s2, s3;
+    s0 = _jxr_rbitstream_uint8(str); /* 0x00 */
+    s1 = _jxr_rbitstream_uint8(str); /* 0x00 */
+    s2 = _jxr_rbitstream_uint8(str); /* 0x01 */
+    s3 = _jxr_rbitstream_uint8(str); /* reserved */
+    DEBUG(" TILE_STARTCODE == %02x %02x %02x (reserved: %02x)\n", s0, s1, s2, s3);
+    if (s0 != 0x00 || s1 != 0x00 || s2 != 0x01) {
+      DEBUG(" TILE_LOWPASS ERROR: Invalid marker.\n");
+      return JXR_EC_ERROR;
+      /* FIX THOR: Invalid TILE_STARTCODE detected */
+    }
+    
+    image->trim_flexbits = 0;
+    if (TRIM_FLEXBITS_FLAG(image)) {
+      image->trim_flexbits =_jxr_rbitstream_uint4(str);
+      DEBUG(" TRIM_FLEXBITS = %u\n", image->trim_flexbits);
+    }
+    
+    /* Read the tile header (which includes sub-headers for
+       all the major passes). */
+    
+    _jxr_r_TILE_HEADER_DC(image, str, 0, tx, ty);
+    if (image->bands_present != 3 /* DCONLY */) {
+      _jxr_r_TILE_HEADER_LOWPASS(image, str, 0, tx, ty);
+      
+      if (image->bands_present != 2 /* NO_HIGHPASS */) {
+	_jxr_r_TILE_HEADER_HIGHPASS(image, str, 0, tx, ty);
+      }
+    }
+
+    /* If the alpha channel is present, then run another set of
+    headers for the alpha channel. */
+    if (ALPHACHANNEL_FLAG(image)) {
+      _jxr_r_TILE_HEADER_DC(image->alpha, str, 1, tx, ty);
+      if (image->bands_present != 3 /* DCONLY */) {
+	_jxr_r_TILE_HEADER_LOWPASS(image->alpha, str, 1, tx, ty);
+	
+	if (image->bands_present != 2 /* NO_HIGHPASS */) {
+	  _jxr_r_TILE_HEADER_HIGHPASS(image->alpha, str, 1, tx, ty);
+	}
+      }
+    }
+
+
+    /* Now form and write out all the compressed data for the
+    tile. This involves scanning the macroblocks, and the
+    blocks within the macroblocks, generating bits as we go. */
+    {
+      unsigned mb_height = EXTENDED_HEIGHT_BLOCKS(image);
+      unsigned mb_width = EXTENDED_WIDTH_BLOCKS(image);
+      
+      if (TILING_FLAG(image)) {
+        mb_height = image->tile_row_height[ty];
+        mb_width = image->tile_column_width[tx];
+      }
+      
+      image->spatial_mb_height = mb_height;
+      image->spatial_mb_width  = mb_width;
+    }
+    /*
+    ** Done with the header. Initialize for the loop below.
+    */
+    image->spatial_buffered_flag = 1;
+    image->stripe_my             = 0;
+    image->cleanup_state         = 0;
+    image->output_sent           = 0;
+    // runs into the following.
+  }
+
+  switch(image->cleanup_state) {
+  case 0:
+    do {
+      unsigned mx, plane_idx, my = image->stripe_my;
+      unsigned mb_width = image->spatial_mb_width;
+      /*
+	for (my = 0 ; my < mb_height ; my += 1) {
+      */
+      if (ALPHACHANNEL_FLAG(image))
+	_jxr_rflush_mb_strip(image->alpha, tx, ty, my);
+      _jxr_rflush_mb_strip(image, tx, ty, my);
+      
+      for (mx = 0 ; mx < mb_width ; mx += 1) {
+	for(plane_idx = 0U; plane_idx < (ALPHACHANNEL_FLAG(image) ? 2U : 1U); plane_idx ++){
+	  int ch;
+	  
+	  /* There is one LP_QP_INDEX per macroblock (if any)
+	     and that value applies to all the channels.
+	     Same for HP_QP_INDEX. There is no DC_QP_INDEX
+	     because DC QP values are per-tile, not per MB. */
+	  int qp_index_lp = 0;
+	  int qp_index_hp = 0;
+	  jxr_image_t plane = (plane_idx == 0 ? image : image->alpha);
+	  
+	  if (plane->bands_present!=3) {
+	    if (plane->num_lp_qps>1 && !plane->lp_use_dc_qp) {
+	      qp_index_lp = _jxr_DECODE_QP_INDEX(str, plane->num_lp_qps);
+	      DEBUG(" DECODE_QP_INDEX(%d) --> %u (LP)\n", plane->num_lp_qps, qp_index_lp);
+	    }
+	    qp_index_hp = 0;
+	    if (plane->bands_present!=2 && plane->num_hp_qps>1) {
+	      if (!plane->hp_use_lp_qp) {
+		qp_index_hp = _jxr_DECODE_QP_INDEX(str, plane->num_hp_qps);
+		DEBUG(" DECODE_QP_INDEX(%d) --> %u (HP)\n", plane->num_hp_qps, qp_index_hp);
+	      }
+	      else {
+		qp_index_hp = qp_index_lp;
+	      }
+	    }
+	  }
+	  for (ch = 0 ; ch < plane->num_channels ; ch += 1) {
+	    /* Save the LP Quant *INDEX* here. Prediction needs it. */
+	    MACROBLK_CUR_LP_QUANT(plane,ch,tx,mx) = qp_index_lp;
+	    DEBUG(" LP_QUANT INDEX for tx=%u ty=%u ch=%u MBx=%d is %d\n", tx, ty, ch, mx,
+		  MACROBLK_CUR_LP_QUANT(plane,ch,tx,mx));
+	    MACROBLK_CUR_HP_QUANT(plane,ch,tx,mx) = plane->hp_quant_ch[ch][qp_index_hp];
+	    DEBUG(" HP_QUANT VALUE for tx=%u ty=%u ch=%u MBx=%d is %d\n", tx, ty, ch, mx,
+		  MACROBLK_CUR_HP_QUANT(plane,ch,tx,mx));
+	  }
+	  
+	  _jxr_r_MB_DC(plane, str, plane_idx, tx, ty, mx, my);
+	  if (plane->bands_present != 3 /* DCONLY */) {
+	    _jxr_r_MB_LP(plane, str, plane_idx, tx, ty, mx, my);
+	    _jxr_complete_cur_dclp(plane, tx, mx, my);
+	    if (plane->bands_present != 2 /* NOHIGHPASS */) {
+	      rc = _jxr_r_MB_CBP(plane, str, plane_idx, tx, ty, mx, my);
+	      if (rc < 0) {
+		DEBUG("r_MB_CBP returned ERROR rc=%d\n", rc);
+		return rc;
+	      }
+	      rc = _jxr_r_MB_HP(plane, str, plane_idx, tx, ty, mx, my);
+	      if (rc < 0) {
+		DEBUG("r_MB_HP returned ERROR rc=%d\n", rc);
+		return rc;
+	      }
+	    }
+	  } else {
+	    _jxr_complete_cur_dclp(plane, tx, mx, my);
+	  }
+	}
+      }
+      /*
+      ** Advance to the next MB row.
+      */
+      image->stripe_my++;
+      /*
+      ** The flush happens only as part of the last tile, so continue iterating
+      ** until that tile is hit.
+      */
+    } while (image->stripe_my < image->spatial_mb_height && image->output_sent == 0);
+
+    /*
+    ** End of tile reached? If so, get the sycn marker
+    */
+    if (image->stripe_my == image->spatial_mb_height)
+      _jxr_rbitstream_syncbyte(str);
+
+    /*
+    ** If this is an intermediate tile and not the right edge, continue with the next tile.
+    */
+    if (tx+1 != image->tile_columns) {
+      image->spatial_buffered_flag = 0;
+      image->stripe_my             = 0;
+      return 1;
+    }
+    /*
+    ** Otherwise, a stripe is complete, go to the user.
+    */
+    if (image->stripe_my < image->spatial_mb_height && image->output_sent) {
+      image->output_sent = 0;
+      return 0; /* not yet done with this strip, but return to the user. */
+    }
+    assert(image->stripe_my == image->spatial_mb_height);
+    /*
+    ** Done with this tile, go to the next. We're done in case this is not the last tile,
+    ** otherwise iterate on until we get to the last one.
+    */
+    if (tx+1 == image->tile_columns && ty+1 == image->tile_rows) {
+      // Last tile row. Continue with cleanup.
+      image->cleanup_state = 1;
+    } else {
+      image->spatial_buffered_flag = 0;
+      image->stripe_my             = 0;
+      return JXR_EC_DONE;
+    }
+    if (image->output_sent)
+      return 0;
+    // runs into the following
+  case 1:
+    /* Flush the remaining strips to output. */
+    if (tx+1 == image->tile_columns && ty+1 == image->tile_rows) {
+      DEBUG(" Cleanup flush after last tile (tx=%d, ty=%d)\n", tx, ty);
+      if (ALPHACHANNEL_FLAG(image))
+	_jxr_rflush_mb_strip(image->alpha, tx, ty, image->spatial_mb_height);
+      _jxr_rflush_mb_strip(image, tx, ty, image->spatial_mb_height);
+      image->cleanup_state++;
+      if (image->output_sent) {
+	image->output_sent = 0;
+	return 0;
+      }
+    } else {
+      return 1;
+    }
+    // runs into the following
+  case 2:
+    if (tx+1 == image->tile_columns && ty+1 == image->tile_rows) {
+      if (ALPHACHANNEL_FLAG(image))
+	_jxr_rflush_mb_strip(image->alpha, tx, ty, image->spatial_mb_height+1);
+      _jxr_rflush_mb_strip(image, tx, ty, image->spatial_mb_height+1);
+      image->cleanup_state++;
+      if (image->output_sent) {
+	image->output_sent = 0;
+	return 0;
+      }
+    } else {
+      return 1;
+    }
+    // runs into the following
+  case 3:
+    if (tx+1 == image->tile_columns && ty+1 == image->tile_rows) {
+      if (ALPHACHANNEL_FLAG(image))
+	_jxr_rflush_mb_strip(image->alpha, tx, ty, image->spatial_mb_height+2);
+      _jxr_rflush_mb_strip(image, tx, ty, image->spatial_mb_height+2);
+      image->cleanup_state++;
+      if (image->output_sent) {
+	image->output_sent = 0;
+	return 0;
+      }
+    } else {
+      return 1;
+    }
+    // runs into the following
+  case 4:
+    if (tx+1 == image->tile_columns && ty+1 == image->tile_rows) {
+      if (ALPHACHANNEL_FLAG(image))
+	_jxr_rflush_mb_strip(image->alpha, tx, ty, image->spatial_mb_height+3);
+      _jxr_rflush_mb_strip(image, tx, ty, image->spatial_mb_height+3);
+      image->cleanup_state++;
+       if (image->output_sent) {
+	image->output_sent = 0;
+	return 0;
+      }
+    } else {
+      return 1;
+    }
+    // runs into the following
+  default:
+    image->spatial_buffered_flag = 0;
+    image->stripe_my             = 0;
+    return JXR_EC_DONE;
+  }
+}
+
+
+/*
 * $Log: r_tile_spatial.c,v $
+* Revision 1.10  2011-11-08 20:17:29  thor
+* Merged a couple of fixes from the JNB.
+*
+* Revision 1.9  2011-04-28 08:45:43  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.8  2010-05-01 11:16:08  thor
+* Fixed the tiff tag order. Added spatial/line mode.
+*
+* Revision 1.7  2010-03-31 07:50:59  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.55 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *

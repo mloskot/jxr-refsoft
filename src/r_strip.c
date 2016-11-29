@@ -1,4 +1,3 @@
-
 /*************************************************************************
 *
 * This software module was originally contributed by Microsoft
@@ -27,6 +26,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -40,9 +70,7 @@
 ***********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: r_strip.c,v 1.51 2008/03/24 18:06:56 steve Exp $")
-#else
-#ident "$Id: r_strip.c,v 1.51 2008/03/24 18:06:56 steve Exp $"
+#pragma comment (user,"$Id: r_strip.c,v 1.18 2011-11-19 20:52:34 thor Exp $")
 #endif
 
 # include "jxr_priv.h"
@@ -1421,7 +1449,7 @@ static void overlap_level2_up3_420(jxr_image_t image, int use_my, int ch)
         for (idx = 0 ; idx < image->tile_column_width[tx] ; idx += 1) {
 
             int*dp = MACROBLK_UP3(image,ch,tx,idx).data;
-            int*up = MACROBLK_UP2(image,ch,tx,idx).data;
+            /*int*up = MACROBLK_UP2(image,ch,tx,idx).data; not needed */
 
             /* Fully interior 4x4 filter blocks... */
             _jxr_4x4OverlapFilter(R2B42(dp,2,2),R2B42(dp,3,2),R2B42(dp,4,2),R2B42(dp,5,2),
@@ -1548,6 +1576,8 @@ static void yuv422_to_yuv444(jxr_image_t image, int mx)
 
     int ch;
     int px, py, idx;
+    
+    //printf("YUV420 chroma centering is %d:%d\n",image->chroma_centering_x,image->chroma_centering_y);
 
     for(ch =1; ch < 3; ch ++) {
 
@@ -1590,6 +1620,8 @@ static void yuv420_to_yuv444(jxr_image_t image, int use_my, int mx)
     int ch;
     int inbuf [10];
     int px, py, idx;
+
+    //printf("YUV420 chroma centering is %d:%d\n",image->chroma_centering_x,image->chroma_centering_y);
 
     /* Upsample in the y direction */
     for (ch = 1 ; ch < 3 ; ch += 1) {
@@ -1694,14 +1726,29 @@ static void yuvk_to_cmyk(jxr_image_t image, int mx)
     }
 }
 
+static void yuvk_to_cmykdirect(jxr_image_t image, int mx)
+{
+    int px;
+    for (px = 0 ; px < 256 ; px += 1) {
+        int y = image->strip[0].up3[mx].data[px];
+        int u = image->strip[1].up3[mx].data[px];
+        int v = image->strip[2].up3[mx].data[px];
+        int k = image->strip[3].up3[mx].data[px];
+
+        image->strip[0].up3[mx].data[px] = u;
+        image->strip[1].up3[mx].data[px] = v;
+        image->strip[2].up3[mx].data[px] = k;
+        image->strip[3].up3[mx].data[px] = y;
+    }
+}
+
 static int PostScalingFloat(int iPixVal, unsigned int expBias, unsigned char lenMantissa, int bitdepth)
 {
     int convVal = 0;
     if (bitdepth == JXR_BD16F) 
     {
         uint8_t iS = 0;
-        unsigned int fV = 0;                                              
-        unsigned int iEM = abs(iPixVal);
+        unsigned int iEM = (iPixVal >= 0)?(iPixVal):(-iPixVal);
         if(iPixVal < 0)
             iS = 1;
         if (iEM > 0x7FFF)
@@ -1799,6 +1846,173 @@ static void PostScalingFl2(int arrayOut[], int arrayIn[]) {
         iShift = ( arrayOut[3]- iEb);
         arrayOut[2] = (unsigned char)((((int) arrayOut[2]) * 2 + 1) >> (iShift + 1));
     }
+}
+
+/*
+** Output shift/clip routines, helpers for emit
+*/
+
+static void shift_and_clip_CMYK(jxr_image_t image,int idx,
+				int bias,int shift_bits,int scale,int round,int clip_low,int clip_hig)
+{
+ int *dp;
+ int jdx,ch;
+
+ for (ch = 0 ; ch < 3 ; ch += 1) {
+   dp = image->strip[ch].up3[idx].data;
+   for (jdx = 0 ; jdx < 256 ; jdx += 1) {
+     dp[jdx] = (dp[jdx] + ((bias>>(shift_bits+1))<<scale) + round) >> scale;
+     dp[jdx] <<= shift_bits;
+     if (dp[jdx] > clip_hig)
+       dp[jdx] = clip_hig;
+     if (dp[jdx] < clip_low)
+       dp[jdx] = clip_low;
+   }
+ }
+ dp = image->strip[3].up3[idx].data;
+ for (jdx = 0 ; jdx < 256 ; jdx += 1) {
+   dp[jdx] = (dp[jdx] - ((bias>>(shift_bits+1))<<scale) + round) >> scale;
+   dp[jdx] <<= shift_bits;
+   if (dp[jdx] > clip_hig)
+     dp[jdx] = clip_hig;
+   if (dp[jdx] < clip_low)
+     dp[jdx] = clip_low;
+ }
+}
+
+static void shift_and_clip_BD565(jxr_image_t image,int idx,int bias,int scale,int round)
+{
+  /* Special case where R and B have different clip thresholds from G,
+  ** special case where red and blue are swapped by default.
+  */
+  int jdx;
+  int *dp0 = image->strip[0].up3[idx].data;
+  int *dp1 = image->strip[1].up3[idx].data;  
+  int *dp2 = image->strip[2].up3[idx].data;
+
+  for (jdx = 0 ; jdx < 256 ; jdx += 1) {
+    int i0 = (dp0[jdx] + (bias<<scale) + round) >> (scale + 1);
+    int i1 = (dp1[jdx] + (bias<<scale) + round) >> (scale + 0); /* green is special */
+    int i2 = (dp2[jdx] + (bias<<scale) + round) >> (scale + 1);
+
+    if (i0 > 31) i0 = 31;
+    if (i0 <  0) i0 = 0;
+    if (i1 > 63) i1 = 63;
+    if (i1 <  0) i1 = 0;
+    if (i2 > 31) i2 = 31;
+    if (i2 <  0) i2 = 0; 
+    //
+    if (RB_SWAPPED(image)) {
+      dp0[jdx] = i2;
+      dp1[jdx] = i1;
+      dp2[jdx] = i0;
+    } else {
+      dp0[jdx] = i0;
+      dp1[jdx] = i1;
+      dp2[jdx] = i2;
+    }
+  }
+}
+
+static void shift_and_clip_BDxxx(jxr_image_t image,int idx,
+				 int bias,int shift_bits,int scale,int round,int clip_low,int clip_hig)
+{
+  /* special case where red and blue are swapped by default.
+  */
+  int jdx;
+  int *dp0 = image->strip[0].up3[idx].data;
+  int *dp1 = image->strip[1].up3[idx].data;  
+  int *dp2 = image->strip[2].up3[idx].data;
+
+
+  for (jdx = 0 ; jdx < 256 ; jdx += 1) {
+    int i0 = (dp0[jdx] + ((bias>>shift_bits)<<scale) + round) >> scale;
+    int i1 = (dp1[jdx] + ((bias>>shift_bits)<<scale) + round) >> scale;
+    int i2 = (dp2[jdx] + ((bias>>shift_bits)<<scale) + round) >> scale;
+
+    i0 <<= shift_bits;
+    if (i0 > clip_hig) i0 = clip_hig;
+    if (i0 < clip_low) i0 = clip_low; 
+
+    i1 <<= shift_bits;
+    if (i1 > clip_hig) i1 = clip_hig;
+    if (i1 < clip_low) i1 = clip_low; 
+
+    i2 <<= shift_bits;
+    if (i2 > clip_hig) i2 = clip_hig;
+    if (i2 < clip_low) i2 = clip_low;
+    //
+    if (RB_SWAPPED(image)) {
+      dp0[jdx] = i2;
+      dp1[jdx] = i1;
+      dp2[jdx] = i0;
+    } else {
+      dp0[jdx] = i0;
+      dp1[jdx] = i1;
+      dp2[jdx] = i2;
+    }
+  }
+}
+
+static void shift_and_clip_regular(jxr_image_t image,int idx,
+				   int bias,int shift_bits,int scale,int round,int clip_low,int clip_hig)
+{
+  /* The regular case, nothing special here
+   */  
+  int ch;
+
+  for(ch = 0;ch < image->num_channels;ch++) {
+    int*dp = image->strip[ch].up3[idx].data;
+    int jdx;
+    for (jdx = 0 ; jdx < 256 ; jdx += 1) {
+      dp[jdx] = (dp[jdx] + ((bias>>shift_bits)<<scale) + round) >> scale;
+      dp[jdx] <<= shift_bits;
+      if (dp[jdx] > clip_hig)
+	dp[jdx] = clip_hig;
+      if (dp[jdx] < clip_low)
+	dp[jdx] = clip_low;
+    }
+  }
+}
+
+static void shift_and_clip_FLOAT(jxr_image_t image,int idx,
+				 int scale,int round)
+{ 
+  /* 16 or 32 bit floating point.
+   */  
+  int ch;
+  for(ch = 0;ch < image->num_channels;ch++) {  
+    int* dp = image->strip[ch].up3[idx].data;
+    int jdx;
+    for (jdx = 0 ; jdx < 256 ; jdx += 1) {
+      dp[jdx] = (dp[jdx] + round) >> scale;
+      dp[jdx] = PostScalingFloat(dp[jdx], image->exp_bias, image->len_mantissa, SOURCE_BITDEPTH(image));
+    }
+  }
+}
+
+static void shift_and_clip_RGBE(jxr_image_t image,int idx,
+				int scale,int round,int *buffer)
+{ 
+  /*
+  ** RGBE : PostScalingFl2 requires one extra sample per pixel - Write directly into buffer 
+  */
+  int jdx;
+  int *dp0 = image->strip[0].up3[idx].data;
+  int *dp1 = image->strip[1].up3[idx].data;
+  int *dp2 = image->strip[2].up3[idx].data;
+  assert(image->num_channels == 3);
+		    
+  for (jdx = 0 ; jdx < 256 ; jdx += 1) {
+    /* There is no bias in this case */
+    int idp0 = (dp0[jdx] + round) >> scale;
+    int idp1 = (dp1[jdx] + round) >> scale;
+    int idp2 = (dp2[jdx] + round) >> scale;
+                      
+    int arrIn[3] = {idp0, idp1, idp2};                            
+    
+    PostScalingFl2(buffer + (image->num_channels + 1) * jdx, arrIn);                            
+  }
 }
 
 static void scale_and_emit_top(jxr_image_t image, int tx, int use_my)
@@ -1939,16 +2153,16 @@ static void scale_and_emit_top(jxr_image_t image, int tx, int use_my)
         }
 #endif
 
-        if(SOURCE_CLR_FMT(image)  == JXR_OCF_YUV420 || SOURCE_CLR_FMT(image)  == JXR_OCF_YUV422 || SOURCE_CLR_FMT(image)  == JXR_OCF_YUV444 || SOURCE_CLR_FMT(image) == JXR_OCF_CMYKDIRECT)
+        if(SOURCE_CLR_FMT(image)  == JXR_OCF_YUV420 || SOURCE_CLR_FMT(image) == JXR_OCF_YUV422 || 
+	   SOURCE_CLR_FMT(image)  == JXR_OCF_YUV444 || SOURCE_CLR_FMT(image) == JXR_OCF_CMYKDIRECT)
         {
             bSkipColorTransform = 1;            
         }
 
         /* Perform transform in place, if needed. */
         /* For YCC output, no color transform is needed */ 
-        if(!bSkipColorTransform)
-        {
-            switch (image->use_clr_fmt ) {
+        if(!bSkipColorTransform) {
+            switch (image->use_clr_fmt) {
 
                 case 1: /* YUV420 */
                     yuv420_to_yuv444(image, use_my, idx);
@@ -1965,178 +2179,107 @@ static void scale_and_emit_top(jxr_image_t image, int tx, int use_my)
                     break;
 
                 case 4: /* CMYK */
-                    yuvk_to_cmyk(image, idx);
+		    yuvk_to_cmyk(image, idx);
                     break;
             }
-        }
+        } else if (SOURCE_CLR_FMT(image) == JXR_OCF_CMYKDIRECT && image->primary) {
+	  /* CYMKDirect is a special case. */
+	  yuvk_to_cmykdirect(image, idx);
+	} else if (SOURCE_CLR_FMT(image) == JXR_OCF_YUV444) {
+	  /* FIX THOR: 
+	  ** Note that YUV444 can also come in subsampled variants, thus upsampling might be required here. 
+	  */
+	  switch(image->use_clr_fmt) {
+	  case 1: /* YUV420 */
+	    yuv420_to_yuv444(image, use_my, idx);
+	    break;
+	  case 2: /* YUV422 */
+	    yuv422_to_yuv444(image, idx);
+	    break;
+	  }
+	}
 
         /* The strip data is now in the output color space. */
 
         /* AddBias and ComputeScaling */
-        if (image->use_clr_fmt == 4 && SOURCE_CLR_FMT(image) != JXR_OCF_CMYKDIRECT/*CMYK*/) {
-            /* The CMYK format has a different and unique set
-            of bias/rounding calculations. Treat it as a
-            special case. And treat the K plane even more
-            special. */
-            int*dp;
-            int jdx;
-            for (ch = 0 ; ch < 3 ; ch += 1) {
-                dp = image->strip[ch].up3[idx].data;
-                for (jdx = 0 ; jdx < 256 ; jdx += 1) {
-                    dp[jdx] = (dp[jdx] + ((bias>>(shift_bits+1))<<scale) + round) >> scale;
-                    dp[jdx] <<= shift_bits;
-                    if (dp[jdx] > clip_hig)
-                        dp[jdx] = clip_hig;
-                    if (dp[jdx] < clip_low)
-                        dp[jdx] = clip_low;
-                }
-            }
-            dp = image->strip[3].up3[idx].data;
-            for (jdx = 0 ; jdx < 256 ; jdx += 1) {
-                dp[jdx] = (dp[jdx] - ((bias>>(shift_bits+1))<<scale) + round) >> scale;
-                dp[jdx] <<= shift_bits;
-                if (dp[jdx] > clip_hig)
-                    dp[jdx] = clip_hig;
-                if (dp[jdx] < clip_low)
-                    dp[jdx] = clip_low;
-            }
-        }
-        else
-        {
-            for (ch = 0 ; ch < image->num_channels ; ch += 1) {
-                /* PostScalingInt and clip, 16s and 32s */
-                if( SOURCE_BITDEPTH(image)!= JXR_BD565 && SOURCE_BITDEPTH(image) != JXR_BD16F && SOURCE_BITDEPTH(image) != JXR_BD32F && SOURCE_CLR_FMT(image) != JXR_OCF_RGBE)
-                {
-                    int*dp = image->strip[ch].up3[idx].data;
-                    int jdx;
-                    for (jdx = 0 ; jdx < 256 ; jdx += 1) {
-                        dp[jdx] = (dp[jdx] + ((bias>>shift_bits)<<scale) + round) >> scale;
-                        dp[jdx] <<= shift_bits;
-                        if (dp[jdx] > clip_hig)
-                            dp[jdx] = clip_hig;
-                        if (dp[jdx] < clip_low)
-                            dp[jdx] = clip_low;
-                    }
-#if defined(DETAILED_DEBUG) && 0
-                    DEBUG("scale_and_emit: block at mx=%d, my=%d, ch=%d:", idx, use_my-3, ch);
-                    for (jdx = 0 ; jdx < 256 ; jdx += 1) {
-                        if (jdx%8 == 0 && jdx > 0)
-                            DEBUG("\n%*s:", 41, "");
-                        DEBUG(" %04x", dp[jdx]);
-                    }
-                    DEBUG("\n");
-#endif
-                }
-                else if(SOURCE_BITDEPTH(image) == JXR_BD565)
-                {
-                    assert(image->num_channels == 3);
-                    /* Special case where R and B have different clip thresholds from G */
-                    int*dp = image->strip[ch].up3[idx].data;
-                    int jdx;
-                    if(ch != 1)
-                    {
-                        clip_hig = 31;
-                        clip_low = 0;
-                    }
-                    else
-                    {
-                        clip_hig = 63;
-                        clip_low = 0;
-                    }
-                    for (jdx = 0 ; jdx < 256 ; jdx += 1) {
-                        if(ch == 1)
-                            dp[jdx] = (dp[jdx] + ((bias)<<scale) + round) >> scale;
-                        else
-                            dp[jdx] = (dp[jdx] + ((bias)<<scale) + round) >> (scale + 1);
-                        if (dp[jdx] > clip_hig)
-                            dp[jdx] = clip_hig;
-                        if (dp[jdx] < clip_low)
-                            dp[jdx] = clip_low;
-                    }
-                }
-
-                /* PostScalingFl */
-                else
-                {
-                    int* dp = image->strip[ch].up3[idx].data;
-                    int jdx;
-                    if(SOURCE_BITDEPTH(image) == JXR_BD16F || SOURCE_BITDEPTH(image) == JXR_BD32F)
-                    {
-                        for (jdx = 0 ; jdx < 256 ; jdx += 1) {
-                            dp[jdx] = (dp[jdx] + round) >> scale;
-                            dp[jdx] = PostScalingFloat(dp[jdx], image->exp_bias, image->len_mantissa, SOURCE_BITDEPTH(image));                                                 
-                        }
-                    }
-                    else /* RGBE : PostScalingFl2 requires one extra sample per pixel - Write directly into buffer */
-                    {                        
-                        int *dp0 = image->strip[0].up3[idx].data;
-                        int *dp1 = image->strip[1].up3[idx].data;
-                        int *dp2 = image->strip[2].up3[idx].data;
-                        assert(image->num_channels == 3);
-                        assert(ch == 0);
-
-                        for (jdx = 0 ; jdx < 256 ; jdx += 1) {
-                            /* There is no bias in this case */
-                            int idp0 = (dp0[jdx] + round) >> scale;
-                            int idp1 = (dp1[jdx] + round) >> scale;
-                            int idp2 = (dp2[jdx] + round) >> scale;
-                        
-                            int arrIn[3] = {idp0, idp1, idp2};                            
-                                                     
-                            PostScalingFl2(buffer + (image->num_channels + 1) * jdx, arrIn);                            
-                            ch = 3;/* We have taken care of all channels in one go */
-                        }
-
-                    }
-
-                    
-                    
-#if defined(DETAILED_DEBUG) && 0
-                    DEBUG("scale_and_emit: block at mx=%d, my=%d, ch=%d:", idx, use_my-3, ch);
-                    for (jdx = 0 ; jdx < 256 ; jdx += 1) {
-                        if (jdx%8 == 0 && jdx > 0)
-                            DEBUG("\n%*s:", 41, "");
-                        DEBUG(" %04x", dp[jdx]);
-                    }
-                    DEBUG("\n");
-#endif
-                }
-            }
-        }
-
+        if (image->use_clr_fmt == JXR_OCF_CMYK && 
+	    SOURCE_CLR_FMT(image) != JXR_OCF_CMYKDIRECT/*CMYK*/) {
+	  /* The CMYK format has a different and unique set
+	     of bias/rounding calculations. Treat it as a
+	     special case. And treat the K plane even more
+	     special. */
+	  shift_and_clip_CMYK(image,idx,bias,shift_bits,scale,round,clip_low,clip_hig);
+	} else if (SOURCE_BITDEPTH(image) == JXR_BD565) {
+	  /*
+	  ** BD565 has two irregularities: special depth of green, and the b-r swap 
+	  */
+	  assert(image->num_channels == 3 || image->num_channels == 1); 
+	  if (image->num_channels == 1) {
+	    shift_and_clip_regular(image,idx,bias,shift_bits,scale,round,0,63);
+	  } else {
+	    shift_and_clip_BD565(image,idx,bias,scale,round);
+	  }
+	} else if (!bSkipColorTransform && 
+		   (SOURCE_BITDEPTH(image) == JXR_BD5 || SOURCE_BITDEPTH(image) == JXR_BD10)) {
+	  /*
+	  ** BD555 and BD101010 have one irregularity, namely the b-r swap
+	  */
+	  assert(image->num_channels == 3 || image->num_channels == 1);
+	  if (image->num_channels == 1) {
+	    shift_and_clip_regular(image,idx,bias,shift_bits,scale,round,clip_low,clip_hig);
+	  } else {
+	    shift_and_clip_BDxxx(image,idx,bias,shift_bits,scale,round,clip_low,clip_hig);
+	  }
+	} else if (SOURCE_BITDEPTH(image) == JXR_BD16F || SOURCE_BITDEPTH(image) == JXR_BD32F) {
+	  /*
+	  ** the wide cases, floating point
+	  */
+	  shift_and_clip_FLOAT(image,idx,scale,round);
+	} else if (SOURCE_CLR_FMT(image) == JXR_OCF_RGBE) {
+	  /*
+	  ** The RGBE case
+	  */
+	  shift_and_clip_RGBE(image,idx,scale,round,buffer);
+	} else {
+	  /*
+	  ** the regular case
+	  */
+	  shift_and_clip_regular(image,idx,bias,shift_bits,scale,round,clip_low,clip_hig);
+	}
+	
          if ( image->primary == 1 ) {  /* alpha channel output is combined with primary channel */
             int px;
             int channels = image->num_channels;
             
-            if(!bSkipColorTransform) /* Interleave channels in buffer */
-            {
-                if (ALPHACHANNEL_FLAG(image))
-                    channels ++;
-
-                for (px = 0 ; px < 256 && (SOURCE_CLR_FMT(image) != JXR_OCF_RGBE) ; px += 1) /*RGBE is a special case that is already taken care of */
+            if(!bSkipColorTransform) { /* Interleave channels in buffer */
+	      if (ALPHACHANNEL_FLAG(image))
+		channels ++;
+	      
+		if (SOURCE_CLR_FMT(image) != JXR_OCF_RGBE) {
+		  /*RGBE is a special case that is already taken care of */
+		  for (px = 0 ; px < 256 ; px += 1) 
                     for (ch = 0 ; ch < image->num_channels ; ch += 1)
-                        buffer[channels*px + ch] = image->strip[ch].up3[idx].data[px];
+		      buffer[channels*px + ch] = image->strip[ch].up3[idx].data[px];
+		}
 
                 if (ALPHACHANNEL_FLAG(image))
                     for (px = 0 ; px < 256 ; px += 1)
                         buffer[channels*px + image->num_channels] = image->alpha->strip[0].up3[idx].data[px];
+            } else {
+	      int size =  256*sizeof(uint32_t);
+	      int i = 0;
+	      for(i = 0; i < image->num_channels; i ++) {
+		memcpy(((uint8_t *)buffer + i*size), image->strip[i].up3[idx].data, size);
+	      }                
+	      if(ALPHACHANNEL_FLAG(image))
+		memcpy(((uint8_t *)buffer) + image->num_channels*size, image->alpha->strip[0].up3[idx].data, size);
             }
-            else
-            {
-                int size =  256*sizeof(uint32_t);
-                int i = 0;
-                for(i = 0; i < image->num_channels; i ++)
-                {
-                    memcpy(((uint8_t *)buffer + i*size), image->strip[i].up3[idx].data, size);
-
-                }                
-                if(ALPHACHANNEL_FLAG(image))
-                    memcpy(((uint8_t *)buffer) + image->num_channels*size, image->alpha->strip[0].up3[idx].data, size);                                    
-            }
-
 
             _jxr_send_mb_to_output(image, idx, use_my-3, buffer);
-        }
+	    
+	    /* thor: Added April 2 2010: Indicate by a flag that some output has been generated */
+	    image->output_sent = 1;
+	}
     }
 }
 
@@ -2594,6 +2737,38 @@ void _jxr_r_rotate_mb_strip(jxr_image_t image)
 
 /*
 * $Log: r_strip.c,v $
+* Revision 1.18  2011-11-19 20:52:34  thor
+* Fixed decoding of YUV422 in 10bpp, fixed 10bpp tiff reading and writing.
+*
+* Revision 1.17  2011-11-09 15:53:14  thor
+* Fixed the bugs reported by Microsoft. Rewrote the output color
+* transformation completely.
+*
+* Revision 1.16  2011-11-08 20:17:29  thor
+* Merged a couple of fixes from the JNB.
+*
+* Revision 1.15  2011-04-28 08:45:43  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.14  2011-03-08 17:42:48  thor
+* Forgot the downsampling for an output color format of YUV444 on encoding.
+*
+* Revision 1.13  2011-03-08 17:30:57  thor
+* Upsampling from YUV42x -> YUV444 does not work.
+*
+* Revision 1.11  2010-08-31 10:10:44  thor
+* Fixed the channel order in CMYKDirect.
+*
+* Revision 1.10  2010-05-13 16:30:03  thor
+* Added options to set the chroma centering. Fixed writing of BGR565.
+* Made the "-p" output option nicer.
+*
+* Revision 1.9  2010-05-01 11:16:08  thor
+* Fixed the tiff tag order. Added spatial/line mode.
+*
+* Revision 1.8  2010-03-31 07:50:59  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.53 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *

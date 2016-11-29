@@ -27,6 +27,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -40,9 +71,7 @@
 ***********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: api.c,v 1.18 2008/03/21 18:05:53 steve Exp $")
-#else
-#ident "$Id: api.c,v 1.18 2008/03/21 18:05:53 steve Exp $"
+#pragma comment (user,"$Id: api.c,v 1.14 2011-11-11 17:13:50 thor Exp $")
 #endif
 
 # include "jxr_priv.h"
@@ -81,18 +110,43 @@ void* jxr_get_user_data(jxr_image_t image)
     return image->user_data;
 }
 
+/* WARNING: This call returns the number of channels in the codestream,
+** which is *likely* not the information you care about. Instead, the
+** number of components is defined through the pixel format in the
+** container.
+*/
 int jxr_get_IMAGE_CHANNELS(jxr_image_t image)
 {
     return image->num_channels;
+}
+
+/* While the above returns the number of channels encoded in the codestream,
+** the following returns the nominal number of channels indicated in the
+** component. Note that this might be different because Y-Only is enabled
+** and thus everything but the first channel is missing. Bummer!
+*/
+int jxr_get_CONTAINER_CHANNELS(jxr_image_t image)
+{
+  return image->container_nc;
+}
+
+/*
+** Return an indicator whether we are currently decoding a separate alpha
+** channel. Returns 0 in case the primary channels are decoded, returns 1
+** in case the separate alpha channel is decoded.
+*/
+int jxr_is_DECODING_SEPARATE_ALPHA(jxr_image_t image)
+{
+  return image->container_current_separate_alpha?1:0;
 }
 
 void jxr_set_INTERNAL_CLR_FMT(jxr_image_t image, jxr_color_fmt_t fmt, int channels)
 {
     switch (fmt) {
         case JXR_YONLY:
-            image->use_clr_fmt = fmt;
+            image->use_clr_fmt  = fmt;
             image->num_channels = 1;
-            break;
+	    break;
         case JXR_YUV420:
         case JXR_YUV422:
         case JXR_YUV444:
@@ -112,6 +166,13 @@ void jxr_set_INTERNAL_CLR_FMT(jxr_image_t image, jxr_color_fmt_t fmt, int channe
             image->num_channels = channels;
             break;
     }
+    image->container_nc = channels;            
+}
+
+void jxr_set_CHROMA_CENTERING(jxr_image_t image,unsigned x,unsigned y)
+{
+  image->chroma_centering_x = x;
+  image->chroma_centering_y = y;
 }
 
 void jxr_set_OUTPUT_CLR_FMT(jxr_image_t image, jxr_output_clr_fmt_t fmt)
@@ -154,7 +215,7 @@ void jxr_set_OUTPUT_CLR_FMT(jxr_image_t image, jxr_output_clr_fmt_t fmt)
 
 jxr_output_clr_fmt_t jxr_get_OUTPUT_CLR_FMT(jxr_image_t image)
 {
-    return image->output_clr_fmt;
+    return SOURCE_CLR_FMT(image); // JNB fix, was: image->output_clr_fmt;
 }
 
 
@@ -249,7 +310,7 @@ int jxr_test_PROFILE_IDC(jxr_image_t image, int flag)
 
     switch (profile) {
         case 44:
-            if (OVERLAP_INFO(image) == 2)
+            if (OVERLAP_INFO(image) >= 2)
                 return JXR_EC_BADFORMAT;
             if (LONG_WORD_FLAG(image))
                 return JXR_EC_BADFORMAT;
@@ -301,10 +362,29 @@ int jxr_test_LEVEL_IDC(jxr_image_t image, int flag)
 
     unsigned i;
     uint64_t max_tile_width = 0, max_tile_height = 0;
-    for (i = 0; i < image->tile_columns; i++)
-        max_tile_width = (uint64_t) (image->tile_column_width[i] > max_tile_width ? image->tile_column_width[i] : max_tile_width);
-    for (i = 0; i < image->tile_rows; i++)
-        max_tile_height = (uint64_t) (image->tile_row_height[i] > max_tile_height ? image->tile_row_height[i] : max_tile_height);
+    unsigned *tdim;
+
+    tdim = (image->tile_column_width)?(image->tile_column_width):(image->tile_column_width_input);
+
+    if (tdim) {
+      for (i = 0; i < image->tile_columns; i++)
+        max_tile_width = (uint64_t) (tdim[i] > max_tile_width ? tdim[i] : max_tile_width);
+    } else {
+      max_tile_width = image->extended_width >> 4;
+    }
+
+    tdim = (image->tile_row_height)?(image->tile_row_height):(image->tile_row_height_input);
+    
+    if (tdim) {
+      for (i = 0; i < image->tile_rows; i++)
+        max_tile_height = (uint64_t) (tdim[i] > max_tile_height ? tdim[i] : max_tile_height);
+    } else {
+      max_tile_height = image->extended_height >> 4;
+    }
+
+    /* JNB fix: convert the tile size to a pixel size */
+    max_tile_width  *= 16;
+    max_tile_height *= 16;
 
     if (image->alpha)
         n += 1;
@@ -347,20 +427,21 @@ int jxr_test_LEVEL_IDC(jxr_image_t image, int flag)
     * Though only specified levels are currently applicable, decoder shouldn't reject other levels.
     */
     if (flag) {
-        if (level >= 255)
-            level = 255;
-        else if (level >= 128)
-            level = 128;
-        else if (level >= 64)
-            level = 64;
-        else if (level >= 32)
-            level = 32;
-        else if (level >= 16)
-            level = 16;
-        else if (level >= 8)
-            level = 8;
-        else if (level >= 4)
-            level = 4;
+      /* JNB fix: level adjustment was wrong - adjust to the next higher level. */
+      if (level <= 4)
+	level = 4;
+      else if (level <= 8)
+	level = 8;
+      else if (level <= 16)
+	level = 16;
+      else if (level <= 32)
+	level = 32;
+      else if (level <= 64)
+	level = 64;
+      else if (level <= 128)
+	level = 128;
+      else
+	level = 255;
     }
 
     switch (level) {
@@ -400,7 +481,8 @@ int jxr_test_LEVEL_IDC(jxr_image_t image, int flag)
     return JXR_EC_OK;
 }
 
-void jxr_set_container_parameters(jxr_image_t image, jxrc_t_pixelFormat pixel_format, unsigned wid, unsigned hei, unsigned separate, unsigned char image_presence, unsigned char alpha_presence, unsigned char alpha) {
+void jxr_set_container_parameters(jxr_image_t image, jxrc_t_pixelFormat pixel_format, unsigned wid, unsigned hei, unsigned separate, unsigned char image_presence, unsigned char alpha_presence, unsigned char alpha) 
+{
     image->container_width = wid;
     image->container_height = hei;
     image->container_separate_alpha = separate ? 1 : 0;
@@ -891,22 +973,22 @@ void jxr_set_NUM_VER_TILES_MINUS1(jxr_image_t image, unsigned num)
 
 void jxr_set_TILE_WIDTH_IN_MB(jxr_image_t image, unsigned* list)
 {
+  if (list == 0 || list[0] == 0) {
     unsigned idx, total_width = 0;
-
-    assert(list != 0);
-    image->tile_column_width = list;
+    image->tile_column_width = calloc(2*image->tile_columns, sizeof(unsigned));
     image->tile_column_position = image->tile_column_width + image->tile_columns;
-
-    if (image->tile_column_width[0] == 0) {
-        total_width = 0;
-        for ( idx = 0 ; idx < image->tile_columns - 1 ; idx++ ) {
-            image->tile_column_width[idx] = (image->extended_width >> 4) / image->tile_columns;
-            image->tile_column_position[idx] = total_width;
-            total_width += image->tile_column_width[idx];
-        }
-        image->tile_column_width[image->tile_columns - 1] = (image->extended_width >> 4) - total_width;
-        image->tile_column_position[image->tile_columns - 1] = total_width;
+    for ( idx = 0 ; idx < image->tile_columns - 1 ; idx++ ) {
+      image->tile_column_width[idx] = (image->extended_width >> 4) / image->tile_columns;
+      image->tile_column_position[idx] = total_width;
+      total_width += image->tile_column_width[idx];
     }
+    image->tile_column_width[image->tile_columns - 1] = (image->extended_width >> 4) - total_width;
+    image->tile_column_position[image->tile_columns - 1] = total_width;
+  } else {
+    image->tile_column_width_input = list;
+    image->tile_column_width       = NULL;
+    image->tile_column_position    = NULL;
+  }
 }
 
 void jxr_set_NUM_HOR_TILES_MINUS1(jxr_image_t image, unsigned num)
@@ -920,22 +1002,24 @@ void jxr_set_NUM_HOR_TILES_MINUS1(jxr_image_t image, unsigned num)
 
 void jxr_set_TILE_HEIGHT_IN_MB(jxr_image_t image, unsigned* list)
 {
+  if (list == 0 || list[0] == 0) { 
     unsigned idx, total_height = 0;
+    image->tile_row_height     = calloc(2*image->tile_rows, sizeof(unsigned));
+    image->tile_row_position   = image->tile_row_height + image->tile_rows;
 
-    assert(list != 0);
-    image->tile_row_height = list;
-    image->tile_row_position = image->tile_row_height + image->tile_rows;
-
-    if (image->tile_row_height[0] == 0) {
-        total_height = 0;
-        for ( idx = 0 ; idx < image->tile_rows - 1 ; idx++ ) {
-            image->tile_row_height[idx] = (image->extended_height >> 4) / image->tile_rows;
-            image->tile_row_position[idx] = total_height;
-            total_height += image->tile_row_height[idx];
-        }
-        image->tile_row_height[image->tile_rows - 1] = (image->extended_height >> 4) - total_height;
-        image->tile_row_position[image->tile_rows - 1] = total_height;
+    total_height = 0;
+    for ( idx = 0 ; idx < image->tile_rows - 1 ; idx++ ) {
+      image->tile_row_height[idx] = (image->extended_height >> 4) / image->tile_rows;
+      image->tile_row_position[idx] = total_height;
+      total_height += image->tile_row_height[idx];
     }
+    image->tile_row_height[image->tile_rows - 1] = (image->extended_height >> 4) - total_height;
+    image->tile_row_position[image->tile_rows - 1] = total_height;
+  } else {
+    image->tile_row_height_input = list;
+    image->tile_row_height       = NULL;
+    image->tile_row_position     = NULL;
+  }
 }
 
 void jxr_set_TILING_FLAG(jxr_image_t image, int flag)
@@ -1139,6 +1223,33 @@ void jxr_set_FLOAT(jxr_image_t image, unsigned char len_mantissa, char exp_bias)
 
 /*
 * $Log: api.c,v $
+* Revision 1.14  2011-11-11 17:13:50  thor
+* Fixed a memory bug, fixed padding channel on encoding bug.
+* Fixed window sizes (again).
+*
+* Revision 1.13  2011-11-08 20:17:29  thor
+* Merged a couple of fixes from the JNB.
+*
+* Revision 1.12  2011-04-28 08:45:42  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.11  2011-03-04 12:12:12  thor
+* Bumped to 1.16. Fixed RGB-YOnly handling, including the handling of
+* YOnly for which a new -f flag has been added.
+*
+* Revision 1.10  2011-02-26 10:24:39  thor
+* Fixed bugs for alpha and separate alpha.
+*
+* Revision 1.9  2010-06-19 11:48:35  thor
+* Fixed memory leaks.
+*
+* Revision 1.8  2010-05-13 16:30:03  thor
+* Added options to set the chroma centering. Fixed writing of BGR565.
+* Made the "-p" output option nicer.
+*
+* Revision 1.7  2010-03-31 07:50:58  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.20 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *

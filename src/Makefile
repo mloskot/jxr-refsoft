@@ -1,13 +1,18 @@
 
 # Change these to suit.
-CFLAGS = -Wall -g -DDETAILED_DEBUG
-#CFLAGS = -Wall -O
+#CFLAGS = -Wall -O0 -ggdb3 #-DDETAILED_DEBUG
+CFLAGS = -Wall -O3
 
 # The "jpegxr" command is build as a demonstration for the
 # libjpegxr library.
 O = jpegxr.o file.o qp.tab.o qp_lexor.o
 
+debug:
+	make jpegxr CFLAGS="-Wall -O0 -ggdb3"
+
 jpegxr: $O libjpegxr.a
+
+final:	jpegxr
 
 qp.tab.o: qp.tab.c jpegxr.h
 qp_lexor.o: qp_lexor.c qp.tab.h jpegxr.h
@@ -59,4 +64,17 @@ r_tile_spatial.o: r_tile_spatial.c jxr_priv.h jpegxr.h
 w_tile_spatial.o: w_tile_spatial.c jxr_priv.h jpegxr.h
 w_tile_frequency.o: w_tile_frequency.c jxr_priv.h jpegxr.h
 
+
+clean:
+	rm -f *.o *.a core jpegxr 
+
+realclean:
+	rm -f *.o *.a core *.tif *.ppm *.pgm jpegxr *.jxr *.raw *.pnm *~ *.zip 
+
+install:
+	cp jpegxr ~/bin/wavelet
+
+distrib:
+	rm -f jpegxr-ref.zip
+	zip jpegxr-ref.zip *.c *.h *.rc *.txt *.sln *.sou *.lex *.y README *.vcproj sample.qp my_getopt-1.5/*.c my_getopt-1.5/*.h my_getopt-1.5/LICENSE Makefile
 

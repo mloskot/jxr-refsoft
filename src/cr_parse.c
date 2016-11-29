@@ -1,5 +1,3 @@
-
-
 /*************************************************************************
 *
 * This software module was originally contributed by Microsoft
@@ -28,6 +26,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -41,9 +70,7 @@
 ***********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: cr_parse.c,v 1.9 2008/03/21 21:23:14 steve Exp $")
-#else
-#ident "$Id: cr_parse.c,v 1.9 2008/03/21 21:23:14 steve Exp $"
+#pragma comment (user,"$Id: cr_parse.c,v 1.9 2011-04-28 08:45:42 thor Exp $")
 #endif
 
 # include "jxr_priv.h"
@@ -62,9 +89,53 @@ jxr_container_t jxr_create_container(void)
 
 void jxr_destroy_container(jxr_container_t container)
 {
-    if(container == NULL)
-        return;
-    free(container);
+  int i;
+
+  if(container == NULL)
+    return;  
+
+  if (container->table) {
+    for(i = 0;i < container->image_count;i++) {
+      struct ifd_table *cur = container->table[i];
+      if (cur && container->table_cnt) {
+	int idx = container->table_cnt[i];
+	while(idx--) {
+	  switch (cur[idx].type) {
+	  case 1: /* BYTE */
+	  case 2: /* UTF8 */
+	  case 6: /* SBYTE */
+	  case 7: /* UNDEFINED */
+	    if (cur[idx].cnt > 4)
+	      free(cur[idx].value_.p_byte);
+	    break;   
+	  case 3: /* USHORT */
+	  case 8: /* SSHORT */
+            if (cur[idx].cnt > 2)
+	      free(cur[idx].value_.p_short);
+	    break;
+	  case 4: /* ULONG */
+	  case 9: /* SLONG */
+	  case 11: /* FLOAT */
+            if (cur[idx].cnt > 1)
+	      free(cur[idx].value_.p_long);
+	    break;
+	  case 5: /* URATIONAL */
+	  case 10: /* SRATIONAL */
+	  case 12: /* DOUBLE */
+	    free(cur[idx].value_.p_rational);
+	    break;
+	  }
+	}
+	free(cur);
+      }
+    }
+    free(container->table);
+  }
+
+  if (container->table_cnt)
+    free(container->table_cnt);
+  
+  free(container);
 }
 
 int jxr_read_image_container(jxr_container_t container, FILE*fd)
@@ -1078,7 +1149,6 @@ int jxrc_padding_data(jxr_container_t container, int image)
 
     assert(data[0] == 0x1c);
     assert(data[1] == 0xea);
-    unsigned i;
 
     return 0;
 }
@@ -1280,6 +1350,18 @@ static int read_ifd(jxr_container_t container, FILE*fd, int image_number, uint32
 
 /*
 * $Log: cr_parse.c,v $
+* Revision 1.9  2011-04-28 08:45:42  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.8  2010-06-19 11:48:36  thor
+* Fixed memory leaks.
+*
+* Revision 1.7  2010-05-22 22:14:35  thor
+* Fixed memory leaks in the TIFF parser.
+*
+* Revision 1.6  2010-03-31 07:50:58  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.11 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *

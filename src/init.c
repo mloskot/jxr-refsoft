@@ -1,5 +1,3 @@
-
-
 /*************************************************************************
 *
 * This software module was originally contributed by Microsoft
@@ -28,6 +26,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -41,9 +70,7 @@
 ***********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: init.c,v 1.23 2008/03/13 21:23:27 steve Exp $")
-#else
-#ident "$Id: init.c,v 1.23 2008/03/13 21:23:27 steve Exp $"
+#pragma comment (user,"$Id: init.c,v 1.12 2011-11-15 10:11:17 thor Exp $")
 #endif
 
 # include "jxr_priv.h"
@@ -79,6 +106,8 @@ static struct jxr_image* __make_jxr(void)
     image->num_channels = 0;
     image->tile_index_table = 0;
     image->tile_index_table_length = 0;
+    image->tile_column_width = 0;
+    image->tile_row_height = 0;
     image->primary = 1;
 
     clear_vlc_tables(image);
@@ -301,13 +330,31 @@ jxr_image_t jxr_create_image(int width, int height, unsigned char * windowing)
     struct jxr_image*image = __make_jxr();
 
     if (windowing[0] == 1) {
-        assert(((width+windowing[2]+windowing[4]) & 0x0f) == 0);
-        assert(((height+windowing[1]+windowing[3]) & 0x0f) == 0);
-    }
-    else {
+      unsigned extra_width  = (-(width + windowing[2]+windowing[4])) & 0x0f;
+      unsigned extra_height = (-(height +windowing[1]+windowing[3])) & 0x0f;
+
+      /*
+      ** fixup the bottom and right borders such that the nominal image
+      ** dimensions are divisible by 16
+      */
+
+      if (extra_width || extra_height)
+	fprintf(stderr,"WARNING: enlarging the window borders to align the extended size to 16 pixel boundaries\n");
+
+      windowing[4] += extra_width;
+      windowing[3] += extra_height;
+
+      assert(((width+windowing[2]+windowing[4]) & 0x0f) == 0);
+      assert(((height+windowing[1]+windowing[3]) & 0x0f) == 0);
+    } else {
         windowing[1] = windowing[2] = 0;
         windowing[3] = (((height + 15) >> 4) << 4) - height;
         windowing[4] = (((width + 15) >> 4) << 4) - width;
+    }
+
+    if (windowing[1] >= 64 || windowing[2] >= 64 || windowing[3] >= 64 || windowing[4] >= 64) {
+      fprintf(stderr,"Window borders are larger or equal than 64 pixels which is unsupported\n");
+      return 0;
     }
 
     image->width1 = width-1;
@@ -361,24 +408,29 @@ void jxr_destroy(jxr_image_t image)
 
         for (idx = 0 ; idx < plane->num_channels ; idx += 1) {
             if (plane->strip[idx].up4) {
-                free(plane->strip[idx].up4[0].data);
-                free(plane->strip[idx].up4);
+	      free(plane->strip[idx].up4[0].pred_dclp);
+	      free(plane->strip[idx].up4[0].data);
+	      free(plane->strip[idx].up4);
             }
             if (plane->strip[idx].up3) {
-                free(plane->strip[idx].up3[0].data);
-                free(plane->strip[idx].up3);
+	      free(plane->strip[idx].up3[0].pred_dclp);
+	      free(plane->strip[idx].up3[0].data);
+	      free(plane->strip[idx].up3);
             }
             if (plane->strip[idx].up2) {
-                free(plane->strip[idx].up2[0].data);
-                free(plane->strip[idx].up2);
+	      free(plane->strip[idx].up2[0].pred_dclp);
+	      free(plane->strip[idx].up2[0].data);
+	      free(plane->strip[idx].up2);
             }
             if (plane->strip[idx].up1) {
-                free(plane->strip[idx].up1[0].data);
-                free(plane->strip[idx].up1);
+	      free(plane->strip[idx].up1[0].pred_dclp);
+	      free(plane->strip[idx].up1[0].data);
+	      free(plane->strip[idx].up1);
             }
             if (plane->strip[idx].cur) {
-                free(plane->strip[idx].cur[0].data);
-                free(plane->strip[idx].cur);
+	      free(plane->strip[idx].cur[0].pred_dclp);
+	      free(plane->strip[idx].cur[0].data);
+	      free(plane->strip[idx].cur);
             }
             if(plane->strip[idx].upsample_memory_x)
                 free(plane->strip[idx].upsample_memory_x);
@@ -409,11 +461,11 @@ void jxr_destroy(jxr_image_t image)
 
         if(plane_idx == 1){
             if (plane->tile_index_table)
-                free(plane->tile_index_table);
+	      free(plane->tile_index_table);
             if (plane->tile_column_width)
-                free(plane->tile_column_width);
+	      free(plane->tile_column_width);
             if (plane->tile_row_height)
-                free(plane->tile_row_height);
+	      free(plane->tile_row_height);
         }
         free(plane);
     }    
@@ -421,6 +473,25 @@ void jxr_destroy(jxr_image_t image)
 
 /*
 * $Log: init.c,v $
+* Revision 1.12  2011-11-15 10:11:17  thor
+* Bumped to release 1.30.
+*
+* Revision 1.11  2011-11-11 17:13:50  thor
+* Fixed a memory bug, fixed padding channel on encoding bug.
+* Fixed window sizes (again).
+*
+* Revision 1.10  2011-11-08 20:17:29  thor
+* Merged a couple of fixes from the JNB.
+*
+* Revision 1.9  2011-04-28 08:45:43  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.8  2010-05-22 22:14:35  thor
+* Fixed memory leaks in the TIFF parser.
+*
+* Revision 1.7  2010-03-31 07:50:58  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.25 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *

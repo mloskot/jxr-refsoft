@@ -1,4 +1,3 @@
-
 /*************************************************************************
 *
 * This software module was originally contributed by Microsoft
@@ -27,6 +26,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -40,9 +70,7 @@
 **********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: w_emit.c,v 1.25 2008/03/24 18:06:56 steve Exp $")
-#else
-#ident "$Id: w_emit.c,v 1.25 2008/03/24 18:06:56 steve Exp $"
+#pragma comment (user,"$Id: w_emit.c,v 1.12 2011-11-15 10:11:17 thor Exp $")
 #endif
 
 # include "jxr_priv.h"
@@ -61,11 +89,6 @@ static int short_header_ok(jxr_image_t image);
 static int need_windowing_flag(jxr_image_t image);
 static int need_trim_flexbits_flag(jxr_image_t image);
 
-
-static void w_MB_FLEXBITS(jxr_image_t image, struct wbitstream*str,
-                          int alpha_flag,
-                          unsigned tx, unsigned ty,
-                          unsigned mx, unsigned my);
 static void w_BLOCK_FLEXBITS(jxr_image_t image, struct wbitstream*str,
                              unsigned tx, unsigned ty,
                              unsigned mx, unsigned my,
@@ -139,13 +162,36 @@ static int fill_in_image_defaults(jxr_image_t image)
     else
         image->header_flags2 &= ~0x80;
 
+    /*
+    ** This tool always writes images in RGB order, i.e. B and R are not swapped for
+    ** 555,565 or 101010.
+    */
+    if (image->ePixelFormat == JXRC_FMT_16bppBGR555 ||
+	image->ePixelFormat == JXRC_FMT_16bppBGR565 ||
+	image->ePixelFormat == JXRC_FMT_32bppBGR101010) {
+      image->header_flags2 |= 0x04; /* B-R NOT_SWAPPED flag */
+    }
+    /*
+    ** set the premultiplied alpha flag
+    */
+    if (image->ePixelFormat == JXRC_FMT_32bppPBGRA ||
+	image->ePixelFormat == JXRC_FMT_64bppPRGBA ||
+	image->ePixelFormat == JXRC_FMT_128bppPRGBAFloat) {
+      if (image->container_nc == 1 || image->container_nc == 4) {
+	image->header_flags2 |= 0x02; /* premultiplied alpha flag */
+      }
+    }
+    
     if (need_windowing_flag(image))
         image->header_flags2 |= 0x20; /* WINDOWING_FLAG */
     
+    /*
+    ** do not modify the window borders
     image->window_extra_bottom = 15 - ((image->height1 + image->window_extra_top) % 16);
     image->extended_height = image->height1 + 1 + image->window_extra_top + image->window_extra_bottom;
     image->window_extra_right = 15 - ((image->width1 + image->window_extra_left) % 16);
     image->extended_width = image->width1 + 1 + image->window_extra_left + image->window_extra_right;
+    */
 
     if (need_trim_flexbits_flag(image))
         image->header_flags2 |= 0x10; /* TRIM_FLEXBITS_FLAG */
@@ -154,15 +200,17 @@ static int fill_in_image_defaults(jxr_image_t image)
 
     /* Test OUTPUT_CLR_FMT against size requirements */
     switch(image->output_clr_fmt) {
-        case JXR_OCF_YUV420: /* YUV420 */
-            assert(image->height1 & 0x1);
-            assert((image->window_extra_top & 0x1) == 0);
-            assert((image->window_extra_bottom & 0x1) == 0);
-        case JXR_OCF_YUV422: /* YUV422 */
-            assert(image->width1 & 0x1);
-            assert((image->window_extra_left & 0x1) == 0);
-            assert((image->window_extra_right & 0x1) == 0);
-            break;
+    case JXR_OCF_YUV420: /* YUV420 */
+      assert(image->height1 & 0x1);
+      assert((image->window_extra_top & 0x1) == 0);
+      assert((image->window_extra_bottom & 0x1) == 0);
+    case JXR_OCF_YUV422: /* YUV422 */
+      assert(image->width1 & 0x1);
+      assert((image->window_extra_left & 0x1) == 0);
+      assert((image->window_extra_right & 0x1) == 0);
+      break;
+    default:
+      break;
     }
 
     /* Force scaling ON if we are using a subsampled color format. */
@@ -185,16 +233,20 @@ static int fill_in_image_defaults(jxr_image_t image)
     }
     
     unsigned * temp_ptr, idx;
-    temp_ptr = image->tile_column_width;
-    image->tile_column_width = (unsigned*)calloc(2*image->tile_columns, sizeof(unsigned));
-    for (idx = 0 ; idx < image->tile_columns ; idx++)
+    if (image->tile_column_width == NULL) {
+      temp_ptr = image->tile_column_width_input;
+      image->tile_column_width = (unsigned*)calloc(2*image->tile_columns, sizeof(unsigned));
+      for (idx = 0 ; idx < image->tile_columns ; idx++)
         image->tile_column_width[idx] = temp_ptr[idx];
+    }
     image->tile_column_position = image->tile_column_width + image->tile_columns;
 
-    temp_ptr = image->tile_row_height;
-    image->tile_row_height = (unsigned*)calloc(2*image->tile_rows, sizeof(unsigned));
-    for (idx = 0 ; idx < image->tile_rows ; idx++)
+    if (image->tile_row_height == NULL) {
+      temp_ptr = image->tile_row_height_input;
+      image->tile_row_height = (unsigned*)calloc(2*image->tile_rows, sizeof(unsigned));
+      for (idx = 0 ; idx < image->tile_rows ; idx++)
         image->tile_row_height[idx] = temp_ptr[idx];
+    }
     image->tile_row_position = image->tile_row_height + image->tile_rows;
 
     if (TILING_FLAG(image)) {
@@ -522,18 +574,18 @@ static int w_image_plane_header(jxr_image_t image, struct wbitstream*str, int al
             break;
         case 1: /* YUV420 */
             image->num_channels = 3;
-            _jxr_wbitstream_uint4(str, 0); /* CHROMA_CENTERING */
-            _jxr_wbitstream_uint4(str, 0); /* COLOR_INTERPRETATION==0 */
+            _jxr_wbitstream_uint4(str, image->chroma_centering_x);
+            _jxr_wbitstream_uint4(str, image->chroma_centering_y);
             break;
         case 2: /* YUV422 */
             image->num_channels = 3;
-            _jxr_wbitstream_uint4(str, 0); /* CHROMA_CENTERING */
-            _jxr_wbitstream_uint4(str, 0); /* COLOR_INTERPRETATION==0 */
+            _jxr_wbitstream_uint4(str, image->chroma_centering_x);
+            _jxr_wbitstream_uint4(str, image->chroma_centering_y);
             break;
         case 3: /* YUV444 */
             image->num_channels = 3;
-            _jxr_wbitstream_uint4(str, 0); /* CHROMA_CENTERING */
-            _jxr_wbitstream_uint4(str, 0); /* COLOR_INTERPRETATION==0 */
+            _jxr_wbitstream_uint4(str, image->chroma_centering_x);
+            _jxr_wbitstream_uint4(str, image->chroma_centering_y);
             break;
         case 4: /* YUVK */
             image->num_channels = 4;
@@ -3135,6 +3187,27 @@ static int w_DECODE_BLOCK_ADAPTIVE(jxr_image_t image, struct wbitstream*str,
 
 /*
 * $Log: w_emit.c,v $
+* Revision 1.12  2011-11-15 10:11:17  thor
+* Bumped to release 1.30.
+*
+* Revision 1.11  2011-11-11 17:13:51  thor
+* Fixed a memory bug, fixed padding channel on encoding bug.
+* Fixed window sizes (again).
+*
+* Revision 1.10  2011-11-09 15:53:14  thor
+* Fixed the bugs reported by Microsoft. Rewrote the output color
+* transformation completely.
+*
+* Revision 1.9  2011-04-28 08:45:43  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.8  2010-05-13 16:30:03  thor
+* Added options to set the chroma centering. Fixed writing of BGR565.
+* Made the "-p" output option nicer.
+*
+* Revision 1.7  2010-03-31 07:50:59  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.28 2009/09/16 12:00:00 microsoft
 * Reference Software v1.8 updates.
 *

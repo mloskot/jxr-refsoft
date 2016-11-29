@@ -28,6 +28,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -41,9 +72,7 @@
 ***********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: jxr_priv.h,v 1.3 2008-05-13 13:47:11 thor Exp $")
-#else
-#ident "$Id: jxr_priv.h,v 1.3 2008-05-13 13:47:11 thor Exp $"
+#pragma comment (user,"$Id: jxr_priv.h,v 1.7 2011-11-11 17:13:51 thor Exp $")
 #endif
 
 # include "jpegxr.h"
@@ -100,6 +129,26 @@ struct cbp_model_s{
     int state[2];
     int count0[2];
     int count1[2];
+};
+
+/*
+** thor: Moved here: read and write bitstreams.
+*/
+
+struct rbitstream{
+    unsigned char byte;
+    int bits_avail;
+    FILE*fd;
+    size_t read_count;
+
+    long mark_stream_position;
+};
+
+struct wbitstream{
+    unsigned char byte;
+    int bits_ready;
+    FILE*fd;
+    size_t write_count;
 };
 
 typedef enum abs_level_vlc_index_e{
@@ -171,8 +220,12 @@ struct jxr_image{
 
     unsigned tile_rows;
     unsigned tile_columns;
-    unsigned*tile_row_height;
+    unsigned*tile_row_height; /* allocated by the system */
     unsigned*tile_column_width;
+
+    unsigned*tile_row_height_input; /* provided by the user */
+    unsigned*tile_column_width_input;
+
     /* This is the position in image macroblocks. */
     unsigned*tile_column_position;
     unsigned*tile_row_position;
@@ -274,6 +327,21 @@ struct jxr_image{
     uint8_t container_image_band_presence;
     uint8_t container_alpha_band_presence;
     uint8_t container_current_separate_alpha;    
+  /*
+  ** THOR: Added line based decompression April 2nd 2010.
+  ** state variables for line by line decompression
+  */
+  struct rbitstream rbits; /* the bitstream to read from */
+  struct wbitstream wbits; /* the bitstream to write to */
+  unsigned int stripe_tx;  /* current tile x coordinate of current stripe */
+  unsigned int stripe_ty;  /* current tile y coordinate of current stripe */
+  unsigned int stripe_my;  /* current macroblock y position within tile */
+  unsigned int cleanup_state;    /* cleanup state */
+  int freq_buffered_flag;    /* set in frequency mode if the image is buffered */
+  int spatial_buffered_flag; /* set in spatial mode if the header is buffered */
+  int output_sent;           /* a flag that is set as soon as an output row left the code */
+  unsigned int spatial_mb_width;  /* width of the ROI of the current tile in MBs */
+  unsigned int spatial_mb_height; /* height of the ROI of the current tile in MBs */
 };
 
 extern unsigned char _jxr_select_lp_index(jxr_image_t image, unsigned tx, unsigned ty,
@@ -311,6 +379,9 @@ extern unsigned char _jxr_select_hp_index(jxr_image_t image, unsigned tx, unsign
 # define ALPHACHANNEL_FLAG(image) ((image)->header_flags2 & 0x01)
 
 # define SOURCE_CLR_FMT(image) (((image)->header_flags_fmt >> 4) & 0x0f)
+
+/* Check whether blue and red shall be swapped in BGR555,565,101010 */
+# define RB_SWAPPED(image) (((image)->header_flags2 & 0x04) == 0)
 
 /* SOURCE_BITDEPTH (aka OUTPUT_BITDEPTH) can be:
 * 0 BD1WHITE1
@@ -382,20 +453,13 @@ extern void _jxr_r_rotate_mb_strip(jxr_image_t image);
 
 /* Wrap up an image collected in frequency mode. */
 extern void _jxr_frequency_mode_render(jxr_image_t image);
+/* thor: Added: Render only a single stripe, then return */
+extern int _jxr_frequency_mode_render_stripe(jxr_image_t image);
 
 /* Application interface functions */
 extern void _jxr_send_mb_to_output(jxr_image_t image, int mx, int my, int*data);
 
 /* I/O functions. */
-
-struct rbitstream{
-    unsigned char byte;
-    int bits_avail;
-    FILE*fd;
-    size_t read_count;
-
-    long mark_stream_position;
-};
 
 /* Get the current *bit* position, for diagnostic use. */
 extern void _jxr_rbitstream_initialize(struct rbitstream*str, FILE*fd);
@@ -430,13 +494,6 @@ extern const char* _jxr_vlc_index_name(int vlc);
 */
 extern void _jxr_rbitstream_mark(struct rbitstream*str);
 extern void _jxr_rbitstream_seek(struct rbitstream*str, uint64_t off);
-
-struct wbitstream{
-    unsigned char byte;
-    int bits_ready;
-    FILE*fd;
-    size_t write_count;
-};
 
 extern void _jxr_wbitstream_initialize(struct wbitstream*str, FILE*fd);
 extern size_t _jxr_wbitstream_bitpos(struct wbitstream*str);
@@ -498,6 +555,12 @@ extern void _jxr_w_ENCODE_QP_INDEX(jxr_image_t image, struct wbitstream*str,
 
 extern int _jxr_r_TILE_SPATIAL(jxr_image_t image, struct rbitstream*str,
                                unsigned tx, unsigned ty);
+/*
+** Added by thor April 2nd 2010: Only one stripe at a time.
+*/
+extern int _jxr_r_TILE_SPATIAL_stripe(jxr_image_t image, struct rbitstream*str,
+				      unsigned tx, unsigned ty);
+
 extern int _jxr_r_TILE_DC(jxr_image_t image, struct rbitstream*str,
                           unsigned tx, unsigned ty);
 extern int _jxr_r_TILE_LP(jxr_image_t image, struct rbitstream*str,
@@ -725,6 +788,23 @@ extern const char*_jxr_vld_index_name(int vlc);
 
 /*
 * $Log: jxr_priv.h,v $
+* Revision 1.7  2011-11-11 17:13:51  thor
+* Fixed a memory bug, fixed padding channel on encoding bug.
+* Fixed window sizes (again).
+*
+* Revision 1.6  2011-11-09 15:53:14  thor
+* Fixed the bugs reported by Microsoft. Rewrote the output color
+* transformation completely.
+*
+* Revision 1.5  2011-04-28 08:45:43  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.4  2010-05-01 11:16:08  thor
+* Fixed the tiff tag order. Added spatial/line mode.
+*
+* Revision 1.3  2010-03-31 07:50:59  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.67 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *

@@ -26,8 +26,7 @@
 * Copyright is not released for products that do not conform to
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
-*
-* Microsoft Corporation retains full right to modify and use the code
+Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
 * do not conform to the JPEG XR standard as specified by ITU-T T.832 |

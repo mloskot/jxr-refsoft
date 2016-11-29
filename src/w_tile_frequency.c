@@ -26,6 +26,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -39,9 +70,7 @@
 ***********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: w_tile_frequency.c,v 1.1 2009/03/09 12:00:00 dan Exp $")
-#else
-#ident "$Id: w_tile_frequency.c,v 1.1 2009/03/09 21:00:00 dan Exp $"
+#pragma comment (user,"$Id: w_tile_frequency.c,v 1.4 2011-04-28 08:45:43 thor Exp $")
 #endif
 
 # include "jxr_priv.h"
@@ -51,8 +80,6 @@ void _jxr_w_TILE_DC(jxr_image_t image, struct wbitstream*str,
                           unsigned tx, unsigned ty)
 {
     DEBUG("START TILE_DC at tile=[%u %u] bitpos=%zu\n", tx, ty, _jxr_wbitstream_bitpos(str));
-
-    uint8_t bands_present = image->bands_present_of_primary;
 
     /* TILE_STARTCODE == 1 */
     DEBUG(" DC_TILE_STARTCODE at bitpos=%zu\n", _jxr_wbitstream_bitpos(str));
@@ -95,8 +122,6 @@ void _jxr_w_TILE_DC(jxr_image_t image, struct wbitstream*str,
             }
         }
     }
-
-    unsigned tile_idx = ty * image->tile_columns + tx;
 
     _jxr_wbitstream_syncbyte(str);
     _jxr_wbitstream_flush(str);
@@ -158,8 +183,6 @@ void _jxr_w_TILE_LP(jxr_image_t image, struct wbitstream*str,
             }
         }
     }
-
-    unsigned tile_idx = ty * image->tile_columns + tx;
 
     _jxr_wbitstream_syncbyte(str);
     _jxr_wbitstream_flush(str);
@@ -283,6 +306,12 @@ void _jxr_w_TILE_HP_FLEX(jxr_image_t image, struct wbitstream*str,
 
 /*
 * $Log: w_tile_frequency.c,v $
+* Revision 1.4  2011-04-28 08:45:43  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.3  2010-03-31 07:50:59  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.2 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *

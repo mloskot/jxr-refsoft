@@ -26,6 +26,37 @@
 * to the JPEG XR standard as specified by ITU-T T.832 |
 * ISO/IEC 29199-2.
 *
+******** Section to be removed when the standard is published ************
+*
+* Assurance that the contributed software module can be used
+* (1) in the ITU-T "T.JXR" | ISO/IEC 29199 ("JPEG XR") standard once the
+* standard has been adopted; and
+* (2) to develop the JPEG XR standard:
+*
+* Microsoft Corporation and any subsequent contributors to the development
+* of this software grant ITU/ISO/IEC all rights necessary to include
+* the originally developed software module or modifications thereof in the
+* JPEG XR standard and to permit ITU/ISO/IEC to offer such a royalty-free,
+* worldwide, non-exclusive copyright license to copy, distribute, and make
+* derivative works of this software module or modifications thereof for
+* use in products claiming conformance to the JPEG XR standard as
+* specified by ITU-T T.832 | ISO/IEC 29199-2, and to the extent that
+* such originally developed software module or portions of it are included
+* in an ITU/ISO/IEC standard. To the extent that the original contributors
+* may own patent rights that would be required to make, use, or sell the
+* originally developed software module or portions thereof included in the
+* ITU/ISO/IEC standard in a conforming product, the contributors will
+* assure ITU/ISO/IEC that they are willing to negotiate licenses under
+* reasonable and non-discriminatory terms and conditions with
+* applicants throughout the world and in accordance with their patent
+* rights declarations made to ITU/ISO/IEC (if any).
+*
+* Microsoft, any subsequent contributors, and ITU/ISO/IEC additionally
+* gives You a free license to this software module or modifications
+* thereof for the sole purpose of developing the JPEG XR standard.
+*
+******** end of section to be removed when the standard is published *****
+*
 * Microsoft Corporation retains full right to modify and use the code
 * for its own purpose, to assign or donate the code to a third party,
 * and to inhibit third parties from using the code for products that
@@ -39,9 +70,7 @@
 ***********************************************************************/
 
 #ifdef _MSC_VER
-#pragma comment (user,"$Id: r_tile_frequency.c,v 1.14 2008/03/18 21:34:04 steve Exp $")
-#else
-#ident "$Id: r_tile_frequency.c,v 1.14 2008/03/18 21:34:04 steve Exp $"
+#pragma comment (user,"$Id: r_tile_frequency.c,v 1.9 2011-11-08 20:17:29 thor Exp $")
 #endif
 
 # include "jxr_priv.h"
@@ -66,6 +95,12 @@ int _jxr_r_TILE_DC(jxr_image_t image, struct rbitstream*str,
     s2 = _jxr_rbitstream_uint8(str); /* 0x01 */
     s3 = _jxr_rbitstream_uint8(str); /* reserved */
     DEBUG(" TILE_STARTCODE == %02x %02x %02x (reserved: %02x)\n", s0, s1, s2, s3);
+
+    if (s0 != 0x00 || s1 != 0x00 || s2 != 0x01) {
+      DEBUG(" TILE_LOWPASS ERROR: Invalid marker.\n");
+      return JXR_EC_ERROR;
+      /* FIX THOR: Invalid TILE_STARTCODE detected */
+    }
 
     _jxr_r_TILE_HEADER_DC(image, str, 0 /* alpha */, tx, ty);
     if (ALPHACHANNEL_FLAG(image))
@@ -283,7 +318,7 @@ int _jxr_r_TILE_FLEXBITS(jxr_image_t image, struct rbitstream*str,
     DEBUG(" TILE_STARTCODE == %02x %02x %02x (reserved: %02x)\n", s0, s1, s2, s3);
     if (s0 != 0x00 || s1 != 0x00 || s2 != 0x01) {
         DEBUG(" TILE_FLEXBITS ERROR: Invalid marker.\n");
-        return JXR_EC_ERROR;
+        return JXR_EC_ERROR; /* THOR: The specs say that this should be decoded nevertheless, though. */
     }
 
     image->trim_flexbits = 0;
@@ -631,7 +666,123 @@ void _jxr_frequency_mode_render(jxr_image_t image)
 }
 
 /*
+** thor: Added April 2nd: Render only a single stripe in frequency mode,
+** then return with an indicator whether this was the last one.
+*/
+int _jxr_frequency_mode_render_stripe(jxr_image_t image)
+{
+  int tx;
+  int ty = image->stripe_ty;
+  int my = image->stripe_my;
+  /*
+  image->stripe_ty
+
+  int ty = image->
+    for (ty = 0 ; ty < (int) image->tile_rows ; ty += 1) {
+        int my;
+        for (my = 0 ; my < (int) image->tile_row_height[ty] ; my += 1) {
+  */
+
+  switch(image->cleanup_state) {
+  case 0:
+    do {
+      if (ALPHACHANNEL_FLAG(image))
+	_jxr_rflush_mb_strip(image->alpha, -1, -1, my + image->alpha->tile_row_position[ty]);
+      _jxr_rflush_mb_strip(image, -1, -1, my + image->tile_row_position[ty]);
+      
+      for (tx = 0 ; tx < (int) image->tile_columns ; tx += 1) {
+	if (ALPHACHANNEL_FLAG(image))
+	  recover_dclphp_strip(image->alpha, tx, ty, my);
+	recover_dclphp_strip(image, tx, ty, my);
+      }
+      
+      my = ++image->stripe_my;
+    } while (image->stripe_my < image->tile_row_height[ty] && image->output_sent == 0);
+
+    if (image->stripe_my < image->tile_row_height[ty]) {
+      /* Not yet done, continue with this tile. */
+      image->output_sent = 0;
+      return 0;
+    }
+
+    assert(image->stripe_my == image->tile_row_height[ty]);
+
+    image->stripe_my = 0;
+    image->stripe_ty++;
+    if (image->stripe_ty < image->tile_rows && image->output_sent) {
+      /* Not yet done, continue with the next tile */
+      image->output_sent = 0;
+      return 0;
+    }
+    
+    if (image->stripe_ty == image->tile_rows)
+      image->cleanup_state++;
+
+    if (image->output_sent) {
+      image->output_sent = 0;
+      return 0;
+    }
+    // Runs into the following
+  case 1:
+    if (ALPHACHANNEL_FLAG(image))
+        _jxr_rflush_mb_strip(image->alpha, -1, -1, EXTENDED_HEIGHT_BLOCKS(image->alpha)+0);
+    _jxr_rflush_mb_strip(image, -1, -1, EXTENDED_HEIGHT_BLOCKS(image)+0);
+    image->cleanup_state++;
+    if (image->output_sent) {
+      image->output_sent = 0;
+      return 0;
+    }
+    // runs into the following
+  case 2:
+    if (ALPHACHANNEL_FLAG(image))
+      _jxr_rflush_mb_strip(image->alpha, -1, -1, EXTENDED_HEIGHT_BLOCKS(image->alpha)+1);
+    _jxr_rflush_mb_strip(image, -1, -1, EXTENDED_HEIGHT_BLOCKS(image)+1);
+    image->cleanup_state++;
+    if (image->output_sent) {
+      image->output_sent = 0;
+      return 0;
+    }   
+    // runs into the following
+  case 3:
+    if (ALPHACHANNEL_FLAG(image))
+      _jxr_rflush_mb_strip(image->alpha, -1, -1, EXTENDED_HEIGHT_BLOCKS(image->alpha)+2);
+    _jxr_rflush_mb_strip(image, -1, -1, EXTENDED_HEIGHT_BLOCKS(image)+2);
+    image->cleanup_state++;
+    if (image->output_sent) {
+      image->output_sent = 0;
+      return 0;
+    }   
+    // runs into the following
+  case 4:
+    if (ALPHACHANNEL_FLAG(image))
+      _jxr_rflush_mb_strip(image->alpha, -1, -1, EXTENDED_HEIGHT_BLOCKS(image->alpha)+3);
+    _jxr_rflush_mb_strip(image, -1, -1, EXTENDED_HEIGHT_BLOCKS(image)+3);
+    image->cleanup_state++;
+    if (image->output_sent) {
+      image->output_sent = 0;
+      return 0;
+    } 
+    // runs into the following
+  default:
+    return JXR_EC_DONE;
+  }
+}
+
+
+/*
 * $Log: r_tile_frequency.c,v $
+* Revision 1.9  2011-11-08 20:17:29  thor
+* Merged a couple of fixes from the JNB.
+*
+* Revision 1.8  2011-04-28 08:45:43  thor
+* Fixed compiler warnings, ported to gcc 4.4, removed obsolete files.
+*
+* Revision 1.7  2010-05-01 11:16:08  thor
+* Fixed the tiff tag order. Added spatial/line mode.
+*
+* Revision 1.6  2010-03-31 07:50:59  thor
+* Replaced by the latest MS version.
+*
 * Revision 1.16 2009/05/29 12:00:00 microsoft
 * Reference Software v1.6 updates.
 *
